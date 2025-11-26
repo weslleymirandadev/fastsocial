@@ -1,3 +1,0 @@
-instagrapi
-fastapi
-pydantic==2.11.7
