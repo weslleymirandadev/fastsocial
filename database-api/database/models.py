@@ -1,4 +1,3 @@
-# database-api/database/models.py
 from sqlalchemy import (
     Column,
     Integer,
@@ -8,12 +7,20 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     func,
-    UniqueConstraint,
+    Boolean,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
+
+
+class Config(Base):
+    __tablename__ = "config"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
 
 
 class Restaurant(Base):
@@ -23,7 +30,6 @@ class Restaurant(Base):
     instagram_username = Column(String(100), unique=True, nullable=False, index=True)
     date = Column(Date, nullable=True)
     name = Column(String(200), nullable=True)
-    city = Column(String(100), nullable=True)
     bloco = Column(Integer, nullable=True)
     ultima_persona = Column(String(200), nullable=True)
     ultima_frase_num = Column(Integer, nullable=True)
@@ -44,7 +50,6 @@ class Persona(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relacionamentos
-    phrases = relationship("Phrase", back_populates="persona", cascade="all, delete-orphan")
     messages = relationship("MessageLog", back_populates="persona")
 
 
@@ -52,16 +57,20 @@ class Phrase(Base):
     __tablename__ = "phrases"
 
     id = Column(Integer, primary_key=True, index=True)
-    persona_id = Column(Integer, ForeignKey("personas.id"), nullable=False)
     text = Column(Text, nullable=False)
     order = Column(Integer, nullable=False)  # ordem dentro da persona (1, 2, 3...)
 
-    # Garantir ordem única por persona
-    __table_args__ = (
-        UniqueConstraint("persona_id", "order", name="uix_persona_order"),
-    )
-
+    # Relacionamentos
+    # Phrase is now an independent entity (not tied to Persona)
     messages = relationship("MessageLog", back_populates="phrase")
+
+
+class AutomationRun(Base):
+    __tablename__ = "automation_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class MessageLog(Base):
@@ -72,6 +81,8 @@ class MessageLog(Base):
     persona_id = Column(Integer, ForeignKey("personas.id"), nullable=False)
     phrase_id = Column(Integer, ForeignKey("phrases.id"), nullable=False)
     sent_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    success = Column(Boolean, nullable=False, default=True)
+    automation_run_id = Column(Integer, ForeignKey("automation_runs.id"), nullable=True)
 
     restaurant = relationship("Restaurant", back_populates="messages")
     persona = relationship("Persona", back_populates="messages")
