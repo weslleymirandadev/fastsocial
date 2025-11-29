@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, validator
 from typing import Optional
+import datetime
 
 
 class PersonaBase(BaseModel):
@@ -9,6 +10,9 @@ class PersonaBase(BaseModel):
         max_length=100, 
         description="Nome único da persona (ex: 'Maria_Sudeste', 'João_Norte')"
     )
+    instagram_username: str = Field(..., description="Username do Instagram da persona")
+    instagram_password: str = Field(..., description="Senha do Instagram da persona")
+
 
 
 class PersonaCreate(PersonaBase):
@@ -56,9 +60,12 @@ class PersonaUpdate(BaseModel):
 class PersonaOut(PersonaBase):
     id: int
     instagram_username: str = Field(..., description="Username do Instagram da persona")
-    instagram_password: str = Field(..., description="Senha do Instagram da persona")
-    created_at: Optional[str] = None
+    created_at: Optional[datetime.datetime] = None
 
     class Config:
-        from_attributes = True  # compatibilidade com SQLAlchemy (orm_mode no Pydantic v1)
-        # Não inclui a senha por segurança
+        # Compatibilidade com SQLAlchemy / Pydantic v1/v2
+        orm_mode = True
+        try:
+            from_attributes = True
+        except Exception:
+            pass
