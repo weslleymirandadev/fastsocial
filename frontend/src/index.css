@@ -1,1 +1,67 @@
 @import "tailwindcss";
+
+button,
+input[type="button"],
+input[type="submit"],
+input[type="reset"] {
+	cursor: pointer;
+}
+
+/* Textual form controls: remove default outline but provide accessible focus ring */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="search"],
+input[type="tel"],
+input[type="url"],
+input[type="number"],
+textarea,
+select {
+	outline: none;
+}
+
+/* Visible focus state for keyboard navigation */
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="search"]:focus,
+input[type="tel"]:focus,
+input[type="url"]:focus,
+input[type="number"]:focus,
+textarea:focus,
+select:focus {
+	outline: none;
+	box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25); /* subtle blue ring */
+	border-color: rgba(59, 130, 246, 1);
+}
+
+/* Remove focus outline for elements that use browser default focus styles (if any remaining) */
+*:focus {
+	outline: none;
+}
+
+/* Scrollbar: 10px wide (WebKit) and matching project colors via CSS variables with sensible fallbacks */
+:root{
+    /* Prefer project-defined variables if present; otherwise fall back to Tailwind-like defaults */
+    --scrollbar-thumb: var(--scrollbar-thumb-color, var(--color-primary, #050A1D));
+    --scrollbar-thumb-hover: var(--scrollbar-thumb-hover-color, var(--color-primary, rgba(59,130,246,0.8)));
+    --scrollbar-track: var(--scrollbar-track-color, var(--bg, #1D293D));
+}
+
+::-webkit-scrollbar-track {
+	background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
+}
+
+/* Firefox: exact pixel width isn't supported; use 'thin' and the same colors */
+* {
+	scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
