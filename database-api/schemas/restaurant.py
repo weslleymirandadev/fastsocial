@@ -10,10 +10,6 @@ class RestaurantBase(BaseModel):
         max_length=100,
         description="Username do Instagram do restaurante (sem o @)"
     )
-    date: Optional[datetime.date] = Field(
-        None,
-        description="Data em que foi realizado o cadastro do restaurante"
-    )
     name: Optional[str] = Field(
         None, 
         max_length=200,
@@ -22,6 +18,10 @@ class RestaurantBase(BaseModel):
     bloco: Optional[int] = Field(
         None, 
         description="Bloco de restaurante"
+    )
+    last_sent_date: Optional[datetime.date] = Field(
+        None,
+        description="Data em que foi realizado o cadastro do restaurante"
     )
     ultima_persona: Optional[str] = Field(
         None, 
@@ -63,7 +63,7 @@ class RestaurantUpdate(BaseModel):
     """
     instagram_username: Optional[str] = Field(None, max_length=100)
     name: Optional[str] = Field(None, max_length=200)
-    city: Optional[str] = Field(None, max_length=100)
+    bloco: Optional[int] = Field(None, ge=1, description="Bloco de restaurante")
 
     @validator("instagram_username", pre=True, always=True)
     def clean_username_update(cls, v):
@@ -80,7 +80,12 @@ class RestaurantOut(RestaurantBase):
     Resposta pública retornada nas rotas GET.
     """
     id: int
-    created_at: Optional[str] = None
+    created_at: Optional[datetime.datetime] = None
 
     class Config:
-        from_attributes = True
+        # Compatibility: accept SQLAlchemy attributes as-is
+        orm_mode = True
+        try:
+            from_attributes = True
+        except Exception:
+            pass
