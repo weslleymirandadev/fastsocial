@@ -1,20 +1,19 @@
 from pydantic import BaseModel, Field, validator
 from typing import Optional
+import datetime
 
-
-class PhraseBase(BaseModel):
+class GlobalPhraseBase(BaseModel):
     text: str = Field(
         ..., 
         min_length=5,
         max_length=2000,
-        description="Texto da mensagem que será enviada no Instagram (DM)"
+        description="Texto da mensagem que será enviada no Instagram (DM)",
     )
+    # Phrase is independent from Persona now
+    order: int = Field(..., ge=1, description="Ordem da frase (opcionalmente usada pela UI)")
 
 
-class PhraseCreate(PhraseBase):
-    """
-    Usado ao cadastrar uma nova frase para uma persona específica.
-    """
+class GlobalPhraseCreate(GlobalPhraseBase):
     @validator("text")
     def strip_and_validate(cls, v):
         cleaned = v.strip().replace(";", "...")
@@ -23,12 +22,10 @@ class PhraseCreate(PhraseBase):
         return cleaned
 
 
-class PhraseUpdate(BaseModel):
-    """
-    Atualização parcial de uma frase já existente.
-    """
+class GlobalPhraseUpdate(BaseModel):
     text: Optional[str] = Field(None, min_length=5, max_length=2000)
     order: Optional[int] = Field(None, ge=1)
+    # persona_id removed: phrases are independent
 
     @validator("text", pre=True, always=True)
     def clean_text(cls, v):
@@ -40,12 +37,13 @@ class PhraseUpdate(BaseModel):
         return cleaned
 
 
-class PhraseOut(PhraseBase):
-    """
-    Resposta pública que será retornada nas rotas GET.
-    """
+class GlobalPhraseOut(GlobalPhraseBase):
     id: int
-    created_at: Optional[str] = None  # será retornado como ISO string
+    created_at: Optional[datetime.datetime] = None
 
     class Config:
-        from_attributes = True  # permite criar o modelo diretamente do objeto SQLAlchemy
+        orm_mode = True
+        try:
+            from_attributes = True
+        except Exception:
+            pass
