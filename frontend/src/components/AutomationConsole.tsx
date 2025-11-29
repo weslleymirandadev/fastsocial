@@ -120,7 +120,7 @@ export function AutomationConsole() {
       </div>
       <div
         ref={containerRef}
-        className="max-h-64 overflow-auto px-3 py-2 whitespace-pre-wrap break-words"
+        className="max-h-64 overflow-auto px-3 py-2 whitespace-pre-wrap wrap-break-word"
       >
         {lines.length === 0 && (
           <div className="text-slate-500">Aguardando eventos de automação...</div>
