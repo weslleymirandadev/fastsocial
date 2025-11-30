@@ -172,6 +172,22 @@ class CarouselAutomator:
 
                 success = client.send_dm(rest_username, next_phrase["text"])
 
+                # Envia imediatamente o resultado para a database-api, que
+                # então irá persistir e broadcastar o evento via websocket.
+                try:
+                    payload = {
+                        "restaurant_id": rest_id,
+                        "persona_id": persona["id"],
+                        "phrase_id": next_phrase["id"],
+                        "success": bool(success),
+                    }
+                    if self.automation_run_id is not None:
+                        payload["automation_run_id"] = self.automation_run_id
+                    # best-effort, não lançar em caso de falha de rede
+                    requests.post(f"{self.db_url}/log/", json=payload, timeout=3)
+                except Exception as e:
+                    logger.debug(f"Falha ao notificar database-api sobre log: {e}")
+
                 if not success:
                     logger.warning(f"Falha ao enviar para @{rest_username}")
 
