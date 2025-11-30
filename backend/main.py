@@ -12,39 +12,22 @@ from typing import Tuple, Union, Dict, Any
 
 from automator.carousel import CarouselAutomator
 from config import settings
+from automator.logging_to_dbapi import DatabaseApiLogHandler
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class DatabaseApiLogHandler(logging.Handler):
-    """Handler que encaminha logs para a database-api, que então os envia via WebSocket.
-
-    Isso permite que todos os logs do backend apareçam em tempo real no frontend.
-    """
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            message = self.format(record)
-            payload = {
-                "message": message,
-                "level": record.levelname,
-                "logger": record.name,
-                "created_at": getattr(record, "created", None),
-            }
-            # Melhor esforço: não explode a aplicação se o envio falhar
-            requests.post(
-                f"{settings.DATABASE_API_URL}/automation/logline",
-                json=payload,
-                timeout=2,
-            )
-        except Exception:
-            # Nunca levantar erro a partir do handler de log
-            return
-
-
-# Anexa o handler globalmente para todas as logs do backend
+# Anexa o handler globalmente para todas as logs do backend (se ainda não anexado)
 root_logger = logging.getLogger()
-root_logger.addHandler(DatabaseApiLogHandler())
+try:
+    already = any(h.__class__.__name__ == "DatabaseApiLogHandler" for h in root_logger.handlers)
+    if not already:
+        db_handler = DatabaseApiLogHandler()
+        db_handler.setLevel(logging.INFO)
+        root_logger.addHandler(db_handler)
+except Exception:
+    # Não falha a inicialização do app caso haja problema ao anexar o handler
+    pass
 
 app = FastAPI(
     title="Backend API - Instagram Automation",
