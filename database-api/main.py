@@ -49,11 +49,22 @@ async def _broadcast_event(event: dict):
 
     Remove conexões quebradas ao detectar erros de envio.
     """
+    # Log de envio para facilitar o debug (aparecerá no stdout do uvicorn)
+    try:
+        print(f"[WS BROADCAST] -> sending event type={event.get('type')} to {len(active_websockets)} sockets")
+    except Exception:
+        pass
+
     dead: list[WebSocket] = []
     for ws in list(active_websockets):
         try:
             await ws.send_json(event)
         except Exception:
+            # Log falha de envio e marca conexão como morta
+            try:
+                print("[WS BROADCAST] -> failed to send to a socket, removing")
+            except Exception:
+                pass
             dead.append(ws)
     for ws in dead:
         if ws in active_websockets:
@@ -98,6 +109,7 @@ async def automation_logline(payload: dict):
         "logger": logger_name,
         "message": message,
         "created_at": created_at,
+        "stats": dm_stats,
     }
 
     # adiciona ao buffer de eventos recentes
