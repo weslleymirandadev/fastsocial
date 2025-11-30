@@ -23,29 +23,39 @@ export function AutomationConsole() {
 
     ws.onopen = () => {
       setConnected(true);
+      // eslint-disable-next-line no-console
+      console.log("WS opened", wsUrl);
     };
 
     ws.onclose = () => {
       setConnected(false);
+      // eslint-disable-next-line no-console
+      console.log("WS closed");
     };
 
     ws.onerror = () => {
       setConnected(false);
+      // eslint-disable-next-line no-console
+      console.error("WS error");
     };
 
     ws.onmessage = (event) => {
       try {
         const data: AutomationEvent = JSON.parse(event.data);
-
-        if (data.stats && typeof data.stats === "object") {
-          setStats({
-            total: data.stats.total ?? 0,
-            success: data.stats.success ?? 0,
-            fail: data.stats.fail ?? 0,
-          });
-        }
+        // Debug: log raw incoming WS messages to help trace missing fields
+        // (remove or lower verbosity once verified)
+        // eslint-disable-next-line no-console
+        console.log("WS incoming:", data);
 
         const applyEvent = (ev: AutomationEvent) => {
+          if (ev.stats && typeof ev.stats === "object") {
+            setStats({
+              total: ev.stats.total ?? 0,
+              success: ev.stats.success ?? 0,
+              fail: ev.stats.fail ?? 0,
+            });
+          }
+
           if (ev.type === "dm_log") {
             const ts = ev.sent_at ? new Date(ev.sent_at).toLocaleTimeString() : "";
             const status = ev.success ? "OK" : "FAIL";
@@ -84,13 +94,25 @@ export function AutomationConsole() {
 
         if (data.type === "history" && Array.isArray(data.items)) {
           for (const item of data.items as AutomationEvent[]) {
-            applyEvent(item);
+            try {
+              applyEvent(item);
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error("Failed to apply history item", err, item);
+            }
           }
         } else {
-          applyEvent(data);
+          try {
+            applyEvent(data);
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.error("Failed to apply event", err, data);
+          }
         }
       } catch {
-        // ignora mensagens inválidas
+        // ignora mensagens inválidas e loga para ajudar o debug
+        // eslint-disable-next-line no-console
+        console.error("WS: mensagem inválida recebida", event.data);
       }
     };
 
