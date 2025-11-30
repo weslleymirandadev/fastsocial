@@ -5,12 +5,48 @@ from instagrapi.exceptions import (
     FeedbackRequired,
     PleaseWaitFewMinutes,
 )
+
+try:
+    from ..logging_to_dbapi import DatabaseApiLogHandler
+except Exception:
+    try:
+        from .logging_to_dbapi import DatabaseApiLogHandler
+    except Exception:
+        try:
+            from automator.logging_to_dbapi import DatabaseApiLogHandler
+        except Exception:
+            from logging_to_dbapi import DatabaseApiLogHandler
+
+import time
+import logging
+import random
 import time
 import logging
 import random
 
-logging.basicConfig(level=logging.INFO)
+
+# Configure a module logger
 logger = logging.getLogger(__name__)
+
+# Ensure logs pass through DatabaseApiLogHandler so they are forwarded to the database-api.
+try:
+    # Configure basic formatting if no handlers are present (useful when this module
+    # is used standalone outside of the main app process).
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO)
+
+    # Attach the DatabaseApiLogHandler directly to this module logger so all
+    # logs emitted here go through that handler.
+    already = any(h.__class__.__name__ == "DatabaseApiLogHandler" for h in logger.handlers)
+    if not already:
+        db_handler = DatabaseApiLogHandler()
+        db_handler.setLevel(logging.INFO)
+        logger.addHandler(db_handler)
+        # Prevent double-emitting: don't propagate to root once handled here
+        logger.propagate = False
+except Exception:
+    # Best-effort: do not raise if logging handler cannot be attached
+    pass
 
 
 class InstagramClient:
