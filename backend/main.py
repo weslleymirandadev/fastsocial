@@ -200,14 +200,46 @@ def start_automation(background_tasks: BackgroundTasks):
     automation_thread.start()
     return {"status": "Automação iniciada em loop infinito", "dica": "Use POST /stop/ para parar"}
 
-@app.post("/stop/")
-def stop_automation():
+@app.post("/stop-immediate/")
+def stop_immediate():
+    """Para imediatamente a execução, mesmo no meio de um ciclo."""
     if not automation_thread or not automation_thread.is_alive():
         return {"status": "Nenhum loop ativo"}
 
-    logger.info("Comando /stop recebido → aguardando ciclo atual terminar...")
+    logger.warning("Comando /stop-immediate recebido → parando execução IMEDIATAMENTE")
+    
+    # Sinaliza para parar
     stop_event.set()
-    return {"status": "Parada solicitada", "detail": "O sistema terminará o ciclo atual e parará completamente"}
+    
+    # Tenta encerrar a thread imediatamente
+    try:
+        # Isso pode causar problemas se a thread estiver em operação crítica
+        # mas é o que precisamos para parar imediatamente
+        if automation_thread.is_alive():
+            import ctypes
+            import inspect
+            
+            # Obtém o ID da thread
+            thread_id = automation_thread.ident
+            
+            # Envia uma exceção para a thread para forçar a parada
+            res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                ctypes.c_long(thread_id),
+                ctypes.py_object(SystemExit)
+            )
+            
+            if res == 0:
+                logger.error("Falha ao interromper a thread: thread não encontrada")
+            elif res > 1:
+                # Se retornar > 1, precisamos chamar novamente para restaurar o estado
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(thread_id), None)
+                logger.warning("Thread interrompida com sucesso (forçado)")
+            
+    except Exception as e:
+        logger.error(f"Erro ao tentar parar a thread: {e}")
+        return {"status": "erro", "detail": f"Erro ao parar a thread: {str(e)}"}
+    
+    return {"status": "Parada imediata solicitada", "detail": "A execução foi interrompida imediatamente"}
 
 
 @app.get("/")

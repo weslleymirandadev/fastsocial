@@ -196,15 +196,15 @@ export function PersonasTab() {
           <div className="space-y-2 text-sm">
             <input
               className="w-full rounded-md bg-slate-900 border border-slate-700 px-2 py-1"
-              placeholder="Nome interno (ex: Maria_Sudeste)"
-              value={newPersona.name}
-              onChange={(e) => setNewPersona({ ...newPersona, name: e.target.value })}
-            />
-            <input
-              className="w-full rounded-md bg-slate-900 border border-slate-700 px-2 py-1"
               placeholder="Instagram username"
               value={newPersona.instagram_username}
               onChange={(e) => setNewPersona({ ...newPersona, instagram_username: e.target.value })}
+            />
+            <input
+              className="w-full rounded-md bg-slate-900 border border-slate-700 px-2 py-1"
+              placeholder="Nome interno (ex: Maria_Sudeste)"
+              value={newPersona.name}
+              onChange={(e) => setNewPersona({ ...newPersona, name: e.target.value })}
             />
             <input
               type="password"
