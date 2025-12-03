@@ -23,97 +23,108 @@ export function AutomationConsole() {
 
     ws.onopen = () => {
       setConnected(true);
-      // eslint-disable-next-line no-console
-      console.log("WS opened", wsUrl);
+      console.log("WebSocket connected");
     };
 
     ws.onclose = () => {
       setConnected(false);
-      // eslint-disable-next-line no-console
-      console.log("WS closed");
+      console.log("WebSocket disconnected");
+      // Try to reconnect after a delay
+      setTimeout(() => {
+        console.log("Attempting to reconnect...");
+        ws.close();
+        const newWs = new WebSocket(wsUrl);
+        ws.onopen = newWs.onopen;
+        ws.onclose = newWs.onclose;
+        ws.onerror = newWs.onerror;
+        ws.onmessage = newWs.onmessage;
+      }, 5000);
     };
 
-    ws.onerror = () => {
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
       setConnected(false);
-      // eslint-disable-next-line no-console
-      console.error("WS error");
     };
 
     ws.onmessage = (event) => {
       try {
         const data: AutomationEvent = JSON.parse(event.data);
-        // Debug: log raw incoming WS messages to help trace missing fields
-        // (remove or lower verbosity once verified)
-        // eslint-disable-next-line no-console
-        console.log("WS incoming:", data);
-
-        const applyEvent = (ev: AutomationEvent) => {
-          if (ev.stats && typeof ev.stats === "object") {
-            setStats({
-              total: ev.stats.total ?? 0,
-              success: ev.stats.success ?? 0,
-              fail: ev.stats.fail ?? 0,
-            });
-          }
-
-          if (ev.type === "dm_log") {
-            const ts = ev.sent_at ? new Date(ev.sent_at).toLocaleTimeString() : "";
-            const status = ev.success ? "OK" : "FAIL";
-            const rest = ev.restaurant || {};
-            const persona = ev.persona || {};
-            const phrase = ev.phrase || {};
-
-            const line =
-              `[${ts}] ${status} ` +
-              `restaurante=@${rest.instagram_username || "?"} (id=${rest.id ?? "?"}, bloco=${rest.bloco ?? "-"}, nome=${rest.name ?? "?"}) | ` +
-              `persona=@${persona.instagram_username || "?"} (id=${persona.id ?? "?"}, nome=${persona.name ?? "?"}) | ` +
-              `frase#${phrase.id ?? "?"}: ${String(phrase.text || "").slice(0, 80)}`;
-
-            setLines((prev) => {
-              const next = [...prev, line];
-              if (next.length > 50) next.shift();
-              return next;
-            });
-          } else if (ev.type === "system_log") {
-            const ts = ev.created_at
-              ? new Date(typeof ev.created_at === "number" ? ev.created_at * 1000 : ev.created_at).toLocaleTimeString()
-              : "";
-            const level = ev.level || "INFO";
-            const loggerName = ev.logger || "";
-            const msg = String(ev.message ?? "");
-
-            const line = `[${ts}] ${level}${loggerName ? ` ${loggerName}` : ""} - ${msg}`;
-
-            setLines((prev) => {
-              const next = [...prev, line];
-              if (next.length > 50) next.shift();
-              return next;
-            });
-          }
-        };
-
-        if (data.type === "history" && Array.isArray(data.items)) {
-          for (const item of data.items as AutomationEvent[]) {
-            try {
-              applyEvent(item);
-            } catch (err) {
-              // eslint-disable-next-line no-console
-              console.error("Failed to apply history item", err, item);
+        
+        // Handle different types of messages
+        switch (data.type) {
+          case "dm_log":
+            handleDmLog(data);
+            break;
+          case "system_log":
+            handleSystemLog(data);
+            break;
+          case "stats":
+            updateStats(data.stats);
+            break;
+          case "history":
+            if (Array.isArray(data.items)) {
+              data.items.forEach(handleDmLog);
             }
-          }
-        } else {
-          try {
-            applyEvent(data);
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error("Failed to apply event", err, data);
-          }
+            break;
+          default:
+            console.log("Unknown message type:", data.type, data);
         }
-      } catch {
-        // ignora mensagens inválidas e loga para ajudar o debug
-        // eslint-disable-next-line no-console
-        console.error("WS: mensagem inválida recebida", event.data);
+      } catch (error) {
+        console.error("Error processing WebSocket message:", error, event.data);
       }
+    };
+
+    const updateStats = (newStats: any) => {
+      if (newStats && typeof newStats === "object") {
+        setStats(prev => ({
+          total: newStats.total ?? prev.total,
+          success: newStats.success ?? prev.success,
+          fail: newStats.fail ?? prev.fail,
+        }));
+      }
+    };
+
+    const handleDmLog = (event: any) => {
+      // Update stats if available
+      if (event.stats) {
+        updateStats(event.stats);
+      }
+
+      // Format the log line
+      const ts = event.sent_at ? new Date(event.sent_at).toLocaleTimeString() : "";
+      const status = event.success ? "OK" : "FAIL";
+      const rest = event.restaurant || {};
+      const persona = event.persona || {};
+      const phrase = event.phrase || {};
+
+      const line =
+        `[${ts}] ${status} ` +
+        `restaurante=@${rest.instagram_username || "?"} (id=${rest.id ?? "?"}, bloco=${rest.bloco ?? "-"}, nome=${rest.name ?? "?"}) | ` +
+        `persona=@${persona.instagram_username || "?"} (id=${persona.id ?? "?"}, nome=${persona.name ?? "?"}) | ` +
+        `frase#${phrase.id ?? "?"}: ${String(phrase.text || "").slice(0, 80)}`;
+
+      // Add to log lines
+      setLines(prev => {
+        const next = [...prev, line];
+        return next.slice(-50); // Keep only the last 50 lines
+      });
+    };
+
+    const handleSystemLog = (event: any) => {
+      const ts = event.created_at
+        ? new Date(typeof event.created_at === "number" ? event.created_at * 1000 : event.created_at).toLocaleTimeString()
+        : "";
+      const level = event.level || "INFO";
+      const loggerName = event.logger || "";
+      const msg = String(event.message || "");
+
+      const line = `[${ts}] ${level}${loggerName ? ` ${loggerName}` : ""} - ${msg}`;
+
+      // Add to log lines
+      setLines(prev => {
+        const next = [...prev, line];
+        return next.slice(-50); // Keep only the last 50 lines
+      });
     };
 
     return () => {
