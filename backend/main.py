@@ -200,6 +200,7 @@ def start_automation(background_tasks: BackgroundTasks):
     automation_thread.start()
     return {"status": "Automação iniciada em loop infinito", "dica": "Use POST /stop/ para parar"}
 
+
 @app.post("/stop-immediate/")
 def stop_immediate():
     """Para imediatamente a execução, mesmo no meio de um ciclo."""

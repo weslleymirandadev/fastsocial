@@ -17,7 +17,7 @@ export async function startAutomation(): Promise<void> {
   statusCache = null;
 }
 
-export async function stopAutomation(): Promise<void> {
-  await apiRequest("/stop/", { method: "POST" });
+export async function stopAutomationImmediate(): Promise<void> {
+  await apiRequest("/stop-immediate/", { method: "POST" });
   statusCache = null;
 }
