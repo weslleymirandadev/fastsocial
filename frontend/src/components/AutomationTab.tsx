@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import type { BackendStatus } from "../types/domain";
-import { fetchBackendStatus, startAutomation, stopAutomation } from "../api/automationApi";
+import { fetchBackendStatus, startAutomation, stopAutomationImmediate } from "../api/automationApi";
 import { AutomationConsole } from "./AutomationConsole";
 
 export function AutomationTab() {
   const [status, setStatus] = useState<BackendStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -14,18 +15,23 @@ export function AutomationTab() {
     setSuccess(null);
   }
 
-  async function loadStatus(force?: boolean) {
+  async function loadStatus(force?: boolean, skipSetStatus: boolean = false) {
     resetMessages();
     setLoading(true);
     try {
       const data = await fetchBackendStatus({ force });
-      setStatus(data);
+      if (!skipSetStatus) {
+        setStatus(data);
+      }
+      return data;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao carregar status do backend");
+      throw e; // Re-throw to handle in the catch block
     } finally {
       setLoading(false);
     }
   }
+
 
   useEffect(() => {
     loadStatus(false);
@@ -47,17 +53,26 @@ export function AutomationTab() {
 
   async function handleStop() {
     resetMessages();
+    setStopping(true);
+    // Update local state immediately
+    setStatus(prev => prev ? { ...prev, loop_running: false } : null);
     setLoading(true);
+    
     try {
-      await stopAutomation();
-      setSuccess("Parada solicitada");
-      await loadStatus();
+      await stopAutomationImmediate();
+      setSuccess("Parada acionada");
+      // Skip setting status since we already did it
+      await loadStatus(true, true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao parar automação");
+      // On error, force refresh the status
+      await loadStatus(true);
     } finally {
       setLoading(false);
+      setStopping(false);
     }
   }
+
 
   const running = status?.loop_running;
 
@@ -79,35 +94,34 @@ export function AutomationTab() {
 
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <div
-          className={`px-3 py-1 rounded-full text-xs font-medium border ${
-            running
-              ? "bg-emerald-900/40 text-emerald-300 border-emerald-600"
-              : "bg-slate-900 text-slate-300 border-slate-600"
-          }`}
+          className={`px-3 py-1 rounded-full text-xs font-medium border ${running
+            ? "bg-emerald-900/40 text-emerald-300 border-emerald-600"
+            : "bg-slate-900 text-slate-300 border-slate-600"
+            }`}
         >
           Sistema: {running ? "Rodando" : "Parado"}
         </div>
         <button
           onClick={handleStart}
-          disabled={!!running}
-          className={`px-3 py-1 rounded-md text-xs font-medium border ${
-            running
-              ? "bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed"
+          disabled={running || stopping}
+          className={`px-3 py-1 rounded-md text-xs font-medium border ${running || stopping
+              ? "bg-slate-800 text-slate-500 border-slate-700 cursor-default" // Changed from cursor-not-allowed to cursor-default
               : "bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-700"
-          }`}
+            }`}
         >
           Iniciar
         </button>
         <button
           onClick={handleStop}
-          disabled={!running}
-          className={`px-3 py-1 rounded-md text-xs font-medium border ${
-            !running
-              ? "bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed"
-              : "bg-red-700 hover:bg-red-600 text-white border-red-800"
-          }`}
+          disabled={!running || stopping}
+          className={`px-3 py-1 rounded-md text-xs font-medium border ${!running
+              ? "bg-slate-800 text-slate-500 border-slate-700 cursor-default" // Changed from cursor-not-allowed to cursor-default
+              : stopping
+                ? "bg-red-900/80 text-red-200 border-red-900 cursor-wait" // Keeping cursor-wait for stopping state
+                : "bg-red-700 hover:bg-red-600 text-white border-red-800"
+            }`}
         >
-          Parar
+          {stopping ? "Parando..." : "Parar"}
         </button>
       </div>
 
