@@ -87,3 +87,14 @@ class MessageLog(Base):
     restaurant = relationship("Restaurant", back_populates="messages")
     persona = relationship("Persona", back_populates="messages")
     phrase = relationship("Phrase", back_populates="messages")
+
+
+class FollowStatus(Base):
+    __tablename__ = "follow_status"
+
+    id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False, index=True)
+    persona_id = Column(Integer, ForeignKey("personas.id"), nullable=False, index=True)
+    restaurant_follows_persona = Column(Boolean, nullable=False, default=False)
+    persona_follows_restaurant = Column(Boolean, nullable=False, default=False)
+    last_checked = Column(DateTime(timezone=True), nullable=True)

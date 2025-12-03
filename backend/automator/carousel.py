@@ -42,16 +42,63 @@ class CarouselAutomator:
         return None
 
     def _log_message(self, restaurant_id: int, persona_id: int, phrase_id: int, success: bool):
-        payload = {
-            "restaurant_id": restaurant_id,
-            "persona_id": persona_id,
-            "phrase_id": phrase_id,
-            "success": success,
+        # Emit an event to the frontend websocket hub with stats and related objects
+        stats = {
+            "total": 1,  # This will be incremented by the database API
+            "success": 1 if success else 0,
+            "fail": 0 if success else 1
         }
-        if self.automation_run_id is not None:
-            payload["automation_run_id"] = self.automation_run_id
 
-        requests.post(f"{self.db_url}/log/", json=payload)
+        # Try to get restaurant details
+        restaurant = {}
+        try:
+            r = requests.get(f"{self.db_url}/restaurants/{restaurant_id}", timeout=3)
+            if r.status_code == 200:
+                restaurant = r.json()
+        except Exception as e:
+            logger.debug(f"Failed to fetch restaurant {restaurant_id}: {e}")
+
+        # Try to get persona details
+        persona = {}
+        try:
+            p = requests.get(f"{self.db_url}/personas/{persona_id}", timeout=3)
+            if p.status_code == 200:
+                persona = p.json()
+        except Exception as e:
+            logger.debug(f"Failed to fetch persona {persona_id}: {e}")
+
+        # Try to get phrase details
+        phrase = {}
+        try:
+            ph = requests.get(f"{self.db_url}/phrases/{phrase_id}", timeout=3)
+            if ph.status_code == 200:
+                phrase = ph.json()
+        except Exception as e:
+            logger.debug(f"Failed to fetch phrase {phrase_id}: {e}")
+
+        # Create the event with all collected information
+        event = {
+            "type": "dm_log",
+            "success": bool(success),
+            "sent_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "automation_run_id": self.automation_run_id,
+            "stats": stats,
+            "restaurant": restaurant or {"id": restaurant_id},
+            "persona": persona or {"id": persona_id},
+            "phrase": phrase or {"id": phrase_id},
+        }
+
+        try:
+            # Send event to the database API
+            response = requests.post(
+                f"{self.db_url}/automation/emit",
+                json=event,
+                timeout=3
+            )
+            if response.status_code != 200:
+                logger.error(f"Failed to emit event: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.error(f"Failed to send event to WebSocket hub: {e}")
 
     def _get_next_phrase(self, phrases: List[Dict], last_phrase_id: Optional[int]) -> Dict:
         """Seleciona aleatoriamente uma frase garantindo diversidade.
@@ -74,6 +121,84 @@ class CarouselAutomator:
 
         # Fallback: se não conseguir (ids estranhos), retorna qualquer uma
         return random.choice(phrases)
+
+    def _update_follow_status(
+        self,
+        restaurant_id: int,
+        persona_id: int,
+        restaurant_follows_persona: Optional[bool] = None,
+        persona_follows_restaurant: Optional[bool] = None,
+    ) -> None:
+        """Envia o status de follow atual para o database-api.
+
+        Best-effort: erros aqui não devem quebrar a automação.
+        """
+        payload: Dict[str, Any] = {
+            "restaurant_id": restaurant_id,
+            "persona_id": persona_id,
+        }
+        if restaurant_follows_persona is not None:
+            payload["restaurant_follows_persona"] = bool(restaurant_follows_persona)
+        if persona_follows_restaurant is not None:
+            payload["persona_follows_restaurant"] = bool(persona_follows_restaurant)
+
+        try:
+            requests.post(f"{self.db_url}/follow-status/", json=payload, timeout=5)
+        except Exception as e:
+            logger.debug(f"Falha ao atualizar follow-status no database-api: {e}")
+
+    def _ensure_mutual_follow(
+        self,
+        client: InstagramClient,
+        restaurant: Dict[str, Any],
+        persona: Dict[str, Any],
+    ) -> bool:
+        """Garante a lógica de follow antes do envio da mensagem.
+
+        - Checa se persona segue o restaurante e se o restaurante segue a persona.
+        - Se ainda não houver follow, envia follow da persona -> restaurante.
+        - Atualiza o banco com o status atual.
+        - Retorna True somente quando ambos se seguem.
+        """
+        rest_username = restaurant.get("instagram_username")
+        if not rest_username:
+            logger.warning("Restaurante sem instagram_username, não é possível checar follow.")
+            return False
+
+        try:
+            persona_follows, restaurant_follows = client.check_mutual_follow(rest_username)
+        except Exception as e:
+            logger.error(f"Erro ao checar follow entre persona={persona.get('instagram_username')} e restaurante={rest_username}: {e}")
+            return False
+
+        # Atualiza status inicial observado
+        self._update_follow_status(
+            restaurant_id=restaurant["id"],
+            persona_id=persona["id"],
+            restaurant_follows_persona=restaurant_follows,
+            persona_follows_restaurant=persona_follows,
+        )
+
+        # Se ainda não seguimos o restaurante, envia follow e permanece em standby
+        if not persona_follows:
+            followed = client.follow(rest_username)
+            if followed:
+                persona_follows = True
+                self._update_follow_status(
+                    restaurant_id=restaurant["id"],
+                    persona_id=persona["id"],
+                    persona_follows_restaurant=True,
+                )
+
+        # Somente se houver follow mútuo liberamos o envio de mensagem
+        if persona_follows and restaurant_follows:
+            return True
+
+        logger.info(
+            f"Follow ainda não é mútuo entre persona=@{persona.get('instagram_username')} "
+            f"e restaurante=@{rest_username} → standby, sem enviar mensagem agora."
+        )
+        return False
 
     def run(self):
         logger.info("Iniciando automação com carrossel...")
@@ -166,27 +291,19 @@ class CarouselAutomator:
                     wait_max_seconds=self.wait_max_seconds,
                 )
 
+                # Antes de enviar DM, checa/atualiza relação de follow
+                if not self._ensure_mutual_follow(client, restaurant, persona):
+                    # Standby: não envia mensagem enquanto follow não for mútuo
+                    continue
+
                 # Seleciona próxima frase garantindo que não repete imediatamente
                 last_phrase_id = last_msg.get("phrase_id") if last_msg else None
                 next_phrase = self._get_next_phrase(phrases, last_phrase_id)
 
                 success = client.send_dm(rest_username, next_phrase["text"])
 
-                # Envia imediatamente o resultado para a database-api, que
-                # então irá persistir e broadcastar o evento via websocket.
-                try:
-                    payload = {
-                        "restaurant_id": rest_id,
-                        "persona_id": persona["id"],
-                        "phrase_id": next_phrase["id"],
-                        "success": bool(success),
-                    }
-                    if self.automation_run_id is not None:
-                        payload["automation_run_id"] = self.automation_run_id
-                    # best-effort, não lançar em caso de falha de rede
-                    requests.post(f"{self.db_url}/log/", json=payload, timeout=3)
-                except Exception as e:
-                    logger.debug(f"Falha ao notificar database-api sobre log: {e}")
+                # Emite evento para frontend via websocket hub (database-api).
+                # A emissão real é feita em `_log_message`, que tenta enriquecer o evento.
 
                 if not success:
                     logger.warning(f"Falha ao enviar para @{rest_username}")

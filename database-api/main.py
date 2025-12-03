@@ -6,7 +6,16 @@ from sqlalchemy import func
 import asyncio
 from collections import deque
 
-from database.models import Base, Restaurant, Persona, Phrase, MessageLog, Config, AutomationRun
+from database.models import (
+    Base,
+    Restaurant,
+    Persona,
+    Phrase,
+    MessageLog,
+    Config,
+    AutomationRun,
+    FollowStatus,
+)
 
 from database.crud import get_db
 from schemas.restaurant import RestaurantOut, RestaurantCreate, RestaurantUpdate
@@ -119,6 +128,38 @@ async def automation_logline(payload: dict):
         asyncio.create_task(_broadcast_event(event))
 
     return {"status": "ok"}
+
+
+@app.post("/automation/emit")
+async def automation_emit(payload: dict):
+    """Recebe um evento pronto (ex: `dm_log`) e envia para todos os WebSockets.
+    
+    Atualiza as estatísticas globais antes de enviar.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+
+    event = payload
+    
+    # Atualiza estatísticas globais se for um evento dm_log
+    if event.get("type") == "dm_log":
+        dm_stats["total"] += 1
+        if event.get("success"):
+            dm_stats["success"] += 1
+        else:
+            dm_stats["fail"] += 1
+    
+    # Sempre inclui as estatísticas mais recentes no evento
+    event["stats"] = dict(dm_stats)  # Envia uma cópia para evitar referências
+
+    # Adiciona ao buffer de eventos recentes
+    recent_events.append(event)
+
+    # Envia para todos os clientes conectados
+    if active_websockets:
+        asyncio.create_task(_broadcast_event(event))
+
+    return {"status": "emitted", "stats": dm_stats}
 
 
 # ======================
@@ -442,6 +483,67 @@ def get_last_message(restaurant_id: int, db: Session = Depends(get_db)):
         "persona_id": last.persona_id,
         "phrase_id": last.phrase_id,
         "sent_at": last.sent_at.isoformat() if last.sent_at else None
+    }
+
+
+@app.get("/follow-status/{restaurant_id}/{persona_id}")
+def get_follow_status(restaurant_id: int, persona_id: int, db: Session = Depends(get_db)):
+    status = (
+        db.query(FollowStatus)
+        .filter(FollowStatus.restaurant_id == restaurant_id, FollowStatus.persona_id == persona_id)
+        .first()
+    )
+    if not status:
+        return {
+            "restaurant_id": restaurant_id,
+            "persona_id": persona_id,
+            "restaurant_follows_persona": False,
+            "persona_follows_restaurant": False,
+            "last_checked": None,
+        }
+
+    return {
+        "restaurant_id": status.restaurant_id,
+        "persona_id": status.persona_id,
+        "restaurant_follows_persona": bool(status.restaurant_follows_persona),
+        "persona_follows_restaurant": bool(status.persona_follows_restaurant),
+        "last_checked": status.last_checked.isoformat() if status.last_checked else None,
+    }
+
+
+@app.post("/follow-status/")
+def upsert_follow_status(payload: dict, db: Session = Depends(get_db)):
+    restaurant_id = payload.get("restaurant_id")
+    persona_id = payload.get("persona_id")
+    if not restaurant_id or not persona_id:
+        raise HTTPException(status_code=400, detail="restaurant_id e persona_id são obrigatórios")
+
+    status = (
+        db.query(FollowStatus)
+        .filter(FollowStatus.restaurant_id == restaurant_id, FollowStatus.persona_id == persona_id)
+        .first()
+    )
+    if not status:
+        status = FollowStatus(restaurant_id=restaurant_id, persona_id=persona_id)
+        db.add(status)
+
+    if "restaurant_follows_persona" in payload:
+        status.restaurant_follows_persona = bool(payload["restaurant_follows_persona"])
+    if "persona_follows_restaurant" in payload:
+        status.persona_follows_restaurant = bool(payload["persona_follows_restaurant"])
+
+    from datetime import datetime
+
+    status.last_checked = datetime.utcnow()
+    db.commit()
+    db.refresh(status)
+
+    return {
+        "restaurant_id": status.restaurant_id,
+        "persona_id": status.persona_id,
+        "restaurant_follows_persona": bool(status.restaurant_follows_persona),
+        "persona_follows_restaurant": bool(status.persona_follows_restaurant),
+        "last_checked": status.last_checked.isoformat() if status.last_checked else None,
     }
 
 

@@ -112,3 +112,33 @@ class InstagramClient:
         except Exception as e:
             logger.error(f"Erro ao enviar DM para @{username}: {e}")
             return False
+
+    def check_mutual_follow(self, other_username: str) -> tuple[bool, bool]:
+        """Retorna (eu_sigo_ele, ele_me_segue) para o usuário alvo.
+
+        Usa instagrapi.user_friendship para obter as flags de following/followed_by.
+        """
+        try:
+            user_id = self.cl.user_id_from_username(other_username.strip().lower())
+            friendship = self.cl.user_friendship(user_id)
+            # following  -> logged-in user (persona) follows target (restaurante)
+            # followed_by -> target (restaurante) follows logged-in user (persona)
+            return bool(getattr(friendship, "following", False)), bool(
+                getattr(friendship, "followed_by", False)
+            )
+        except Exception as e:
+            logger.error(f"Erro ao checar relação de follow com @{other_username}: {e}")
+            return False, False
+
+    def follow(self, username: str) -> bool:
+        """Segue o usuário indicado a partir da conta logada."""
+        try:
+            user_id = self.cl.user_id_from_username(username.strip().lower())
+            self.cl.user_follow(user_id)
+            logger.info(f"Follow enviado para @{username} a partir de @{self.username}")
+            delay = random.uniform(self.wait_min_seconds, self.wait_max_seconds)
+            time.sleep(delay)
+            return True
+        except Exception as e:
+            logger.error(f"Erro ao seguir @{username}: {e}")
+            return False
