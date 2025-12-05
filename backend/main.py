@@ -5,7 +5,8 @@ import requests
 import time
 import logging
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Tuple, Union, Dict, Any
@@ -156,12 +157,13 @@ def get_wait_config() -> tuple[int, int]:
 # === Loop Infinito com Descanso Individual ===
 def run_forever():
     cycle = 0
+    BRT = timezone(timedelta(hours=-3))
 
     while not stop_event.is_set():
         cycle += 1
         stop_event.clear()  # garante que não pare no meio do ciclo
-        start = datetime.utcnow()
-        logger.info(f"══════ CICLO {cycle} INICIADO ══════ {start.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        start = datetime.now(BRT)
+        logger.info(f"══════ CICLO {cycle} INICIADO ══════")
 
         try:
             rest_days = get_rest_days()
@@ -175,15 +177,12 @@ def run_forever():
         except Exception as e:
             logger.error(f"Erro crítico no ciclo {cycle}: {e}", exc_info=True)
 
-        end = datetime.utcnow()
+        end = datetime.now(BRT)
         logger.info(f"══════ CICLO {cycle} FINALIZADO ══════ {end.strftime('%H:%M:%S')} | Duração: {(end-start).seconds}s")
 
         if stop_event.is_set():
             logger.info("Comando de parada recebido. Encerrando após ciclo completo.")
             break
-
-        # Pequena pausa antes de iniciar novo ciclo (evita sobrecarga)
-        time.sleep(30)
 
     logger.info("LOOP ENCERRADO COM SUCESSO.")
 
