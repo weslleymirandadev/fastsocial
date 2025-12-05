@@ -120,9 +120,12 @@ export function ConfigTab() {
 
         <button
           onClick={handleSaveAll}
-          className="px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-xs font-medium"
+          disabled={loading}
+          className={`px-3 py-1 rounded-md bg-emerald-600 text-xs font-medium${
+            loading ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500"
+          }`}
         >
-          Salvar configurações
+          {loading ? "Salvando..." : "Salvar configurações"}
         </button>
 
         <div className="text-[11px] text-slate-500 mt-2">

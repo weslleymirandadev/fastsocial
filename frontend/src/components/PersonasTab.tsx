@@ -13,6 +13,8 @@ export function PersonasTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   function resetMessages() {
     setError(null);
@@ -82,7 +84,7 @@ export function PersonasTab() {
           skipped++;
           continue;
         }
-        const username = rawUsername.toLowerCase().replace(/^@/, "");
+        const username = rawUsername.toLowerCase().replace(/^@/, "").trim();
         if (!username || existing.has(username)) {
           skipped++;
           continue;
@@ -116,8 +118,14 @@ export function PersonasTab() {
   async function handleCreate() {
     resetMessages();
     setLoading(true);
+    setCreating(true);
     try {
-      await createPersona(newPersona);
+      const payload = {
+        name: newPersona.name,
+        instagram_username: newPersona.instagram_username.toLowerCase().replace(/^@/, "").trim(),
+        instagram_password: newPersona.instagram_password
+      }
+      await createPersona(payload);
       setSuccess("Persona criada");
       setNewPersona({ name: "", instagram_username: "", instagram_password: "" });
       await loadPersonas();
@@ -125,6 +133,7 @@ export function PersonasTab() {
       setError(e instanceof Error ? e.message : "Erro ao criar persona");
     } finally {
       setLoading(false);
+      setCreating(false);
     }
   }
 
@@ -132,6 +141,7 @@ export function PersonasTab() {
     if (!editingPersona) return;
     resetMessages();
     setLoading(true);
+    setUpdating(true);
     try {
       await updatePersona(editingPersona.id, {
         name: editingPersona.name,
@@ -145,6 +155,7 @@ export function PersonasTab() {
       setError(e instanceof Error ? e.message : "Erro ao atualizar persona");
     } finally {
       setLoading(false);
+      setUpdating(false);
     }
   }
 
@@ -215,9 +226,12 @@ export function PersonasTab() {
             />
             <button
               onClick={handleCreate}
-              className="mt-1 px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm font-medium"
+              disabled={creating}
+              className={`mt-1 px-3 py-1 rounded-md bg-emerald-600 text-sm font-medium${
+                creating ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500"
+              }`}
             >
-              Salvar
+              {creating ? "Salvando..." : "Salvar"}
             </button>
           </div>
         </div>
@@ -289,9 +303,12 @@ export function PersonasTab() {
           </div>
           <button
             onClick={handleUpdate}
-            className="px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-xs font-medium"
+            disabled={updating}
+            className={`px-3 py-1 rounded-md bg-emerald-600 text-xs font-medium${
+              updating ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500"
+            }`}
           >
-            Atualizar
+            {updating ? "Atualizando..." : "Atualizar"}
           </button>
         </div>
       )}

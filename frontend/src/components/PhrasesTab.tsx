@@ -4,11 +4,13 @@ import { fetchPhrases, createPhrase, createPhrasesBulk, updatePhrase, deletePhra
 
 export function PhrasesTab() {
   const [phrases, setPhrases] = useState<Phrase[]>([]);
-  const [newPhrase, setNewPhrase] = useState({ text: "", order: 1 });
+  const [newPhrase, setNewPhrase] = useState({ text: "", order: 0 });
   const [editingPhrase, setEditingPhrase] = useState<Phrase | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
   function resetMessages() {
     setError(null);
@@ -20,7 +22,18 @@ export function PhrasesTab() {
     setLoading(true);
     try {
       const data = await fetchPhrases({ force });
-      setPhrases(data || []);
+      const list = data || [];
+      setPhrases(list);
+
+      // Calcula o próximo índice disponível para nova frase (maior order + 1, começando em 0)
+      let maxOrder = -1;
+      for (const ph of list) {
+        if (typeof ph.order === "number" && ph.order > maxOrder) {
+          maxOrder = ph.order;
+        }
+      }
+      const nextOrder = maxOrder + 1;
+      setNewPhrase((prev) => ({ ...prev, order: nextOrder }));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao carregar frases");
     } finally {
@@ -50,20 +63,25 @@ export function PhrasesTab() {
       const cols = header.split(",").map((c) => c.trim());
 
       const idxText = cols.indexOf("Frase");
-      const idxOrder = cols.indexOf("# Frase");
 
       if (idxText === -1) {
         throw new Error("CSV deve conter a coluna Frase");
-      }
-
-      if (idxOrder === -1) {
-        throw new Error("CSV deve conter a coluna # Frase");
       }
 
       const current = await fetchPhrases({ force: true });
       const existing = new Set(
         (current || []).map((ph) => `${(ph.text || "").trim()}::${ph.order ?? ""}`)
       );
+
+      // Calcula o maior índice de ordem já existente e começa do próximo,
+      // garantindo que o primeiro índice seja 0 quando não houver frases.
+      let maxOrder = -1;
+      for (const ph of current || []) {
+        if (typeof ph.order === "number" && ph.order > maxOrder) {
+          maxOrder = ph.order;
+        }
+      }
+      let nextOrder = maxOrder + 1;
 
       let created = 0;
       let skipped = 0;
@@ -79,7 +97,7 @@ export function PhrasesTab() {
           skipped++;
           continue;
         }
-        const order = idxOrder >= 0 ? Number(parts[idxOrder] || "1") : 1;
+        const order = nextOrder;
         const key = `${phraseText.trim()}::${order}`;
         if (existing.has(key)) {
           skipped++;
@@ -88,6 +106,7 @@ export function PhrasesTab() {
 
         toCreate.push({ text: phraseText, order });
         existing.add(key);
+        nextOrder++;
         created++;
       }
 
@@ -112,15 +131,18 @@ export function PhrasesTab() {
   async function handleCreate() {
     resetMessages();
     setLoading(true);
+    setCreating(true);
     try {
       await createPhrase(newPhrase);
       setSuccess("Frase criada");
-      setNewPhrase({ text: "", order: 1 });
+      // Limpa apenas o texto; o próximo índice será recalculado em loadPhrases
+      setNewPhrase((prev) => ({ ...prev, text: "" }));
       await loadPhrases();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao criar frase");
     } finally {
       setLoading(false);
+      setCreating(false);
     }
   }
 
@@ -128,6 +150,7 @@ export function PhrasesTab() {
     if (!editingPhrase) return;
     resetMessages();
     setLoading(true);
+    setUpdating(true);
     try {
       await updatePhrase(editingPhrase.id, {
         text: editingPhrase.text,
@@ -140,6 +163,7 @@ export function PhrasesTab() {
       setError(e instanceof Error ? e.message : "Erro ao atualizar frase");
     } finally {
       setLoading(false);
+      setUpdating(false);
     }
   }
 
@@ -195,21 +219,26 @@ export function PhrasesTab() {
               value={newPhrase.text}
               onChange={(e) => setNewPhrase((prev) => ({ ...prev, text: e.target.value }))}
             />
-            <input
-              type="number"
-              className="w-24 rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
-              placeholder="Ordem"
-              value={newPhrase.order}
-              onChange={(e) =>
-                setNewPhrase((prev) => ({ ...prev, order: Number(e.target.value) || 1 }))
-              }
-            />
-            <button
-              onClick={handleCreate}
-              className="mt-1 px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm font-medium"
-            >
-              Salvar
-            </button>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                className="w-24 rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+                placeholder="Ordem"
+                value={newPhrase.order}
+                onChange={(e) =>
+                  setNewPhrase((prev) => ({ ...prev, order: Number(e.target.value) || 1 }))
+                }
+              />
+              <button
+                onClick={handleCreate}
+                disabled={creating}
+                className={`px-3 py-1 rounded-md bg-emerald-600 text-xs font-medium${
+                  creating ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500"
+                }`}
+              >
+                {creating ? "Salvando..." : "Salvar"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -222,7 +251,7 @@ export function PhrasesTab() {
                   <div className="flex items-center gap-2">
                     <div className="font-semibold">#{ph.order ?? "-"}</div>
                   </div>
-                  <div className="text-slate-300 whitespace-pre-wrap wrap-break-word">{ph.text}</div>
+                  <div className="text-slate-300 whitespace-pre-wrap wrap-break-word line-clamp-1 max-w-full">{ph.text}</div>
                 </div>
                 <div className="flex flex-col gap-1 text-xs">
                   <button
@@ -263,23 +292,28 @@ export function PhrasesTab() {
             value={editingPhrase.text}
             onChange={(e) => setEditingPhrase({ ...editingPhrase, text: e.target.value })}
           />
-          <input
-            type="number"
-            className="w-24 rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
-            value={editingPhrase.order ?? ""}
-            onChange={(e) =>
-              setEditingPhrase({
-                ...editingPhrase,
-                order: e.target.value ? Number(e.target.value) : null,
-              })
-            }
-          />
-          <button
-            onClick={handleUpdate}
-            className="px-3 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-xs font-medium"
-          >
-            Atualizar
-          </button>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              className="w-24 rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-xs"
+              value={editingPhrase.order ?? ""}
+              onChange={(e) =>
+                setEditingPhrase({
+                  ...editingPhrase,
+                  order: e.target.value ? Number(e.target.value) : null,
+                })
+              }
+            />
+            <button
+              onClick={handleUpdate}
+              disabled={updating}
+              className={`px-3 py-1 rounded-md bg-emerald-600 text-xs font-medium${
+                updating ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500"
+              }`}
+            >
+              {updating ? "Atualizando..." : "Atualizar"}
+            </button>
+          </div>
         </div>
       )}
     </div>
