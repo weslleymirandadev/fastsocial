@@ -43,7 +43,7 @@ function App() {
             <div>
               <h1 className="text-2xl font-semibold">FastSocial</h1>
               <p className="text-slate-400 text-xs mt-1">
-                Painel simples para gerenciar restaurantes, personas, frases, configs e automação.
+                Painel de geranciamento e controle de fluxo de automações.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
