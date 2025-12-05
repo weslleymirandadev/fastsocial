@@ -1,7 +1,8 @@
 import requests
 import logging
-import datetime
+from datetime import datetime, timezone, timedelta
 import random
+import time
 from collections import defaultdict
 from typing import List, Dict, Any, Optional
 from .client import InstagramClient
@@ -9,6 +10,7 @@ from config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+BRT = timezone(timedelta(hours=-3))
 
 
 class CarouselAutomator:
@@ -80,7 +82,7 @@ class CarouselAutomator:
         event = {
             "type": "dm_log",
             "success": bool(success),
-            "sent_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "sent_at": datetime.now(BRT).isoformat(),
             "automation_run_id": self.automation_run_id,
             "stats": stats,
             "restaurant": restaurant or {"id": restaurant_id},
@@ -103,9 +105,11 @@ class CarouselAutomator:
     def _get_next_phrase(self, phrases: List[Dict], last_phrase_id: Optional[int]) -> Dict:
         """Seleciona aleatoriamente uma frase garantindo diversidade.
 
-        - Se não houver histórico, sorteia qualquer frase.
-        - Se houver, sorteia até cair em uma frase com id diferente da última,
-          com proteção para o caso de só existir 1 frase.
+        TODO: refazer essa lógica
+            Na primeira vez, envia sequencialmente as mensagens de 1 até a 200
+            Checar também a ultima mensagem enviada para o restaurante:
+                - se for a mesma escolhida, muda para a próxima
+
         """
         if not phrases:
             raise ValueError("Lista de frases vazia")
@@ -200,6 +204,32 @@ class CarouselAutomator:
         )
         return False
 
+    def _send_multipart_dm(
+        self,
+        client: InstagramClient,
+        username: str,
+        text: str,
+        start_index: int = 0,
+    ) -> (bool, Optional[int]):
+        parts = [p.strip() for p in text.split(";") if p.strip()]
+
+        if not parts:
+            return False, None
+
+        overall_success = True
+        failed_index: int | None = None
+
+        for idx in range(start_index, len(parts)):
+            part = parts[idx]
+            part_success = client.send_dm(username, part)
+            if not part_success:
+                overall_success = False
+                failed_index = idx
+                break
+            time.sleep(random.randint(5, 10))
+
+        return overall_success, failed_index
+
     def run(self):
         logger.info("Iniciando automação com carrossel...")
 
@@ -263,25 +293,41 @@ class CarouselAutomator:
                 # Consulta último envio para decidir descanso e rotação de persona/frase
                 last_msg = self._get_last_message(rest_id)
 
-                # Escolha da persona respeitando descanso e evitando repetição imediata
-                persona_index = base_persona_index
-                if last_msg:
-                    # Se a última persona foi justamente a persona base, pula para a próxima
-                    last_persona_id = last_msg.get("persona_id")
-                    if last_persona_id is not None and last_persona_id == personas[persona_index]["id"]:
-                        persona_index = (persona_index + 1) % len(personas)
-
-                persona = personas[persona_index]
-
-                # Verifica descanso em dias para este restaurante
+                # Verifica descanso em dias para este restaurante (horário de Brasília)
                 if last_msg and last_msg.get("sent_at"):
-                    last_sent = datetime.fromisoformat(last_msg["sent_at"].replace("Z", "+00:00"))
-                    days_since = (datetime.utcnow() - last_sent.utcfromtimestamp(last_sent.timestamp())).days
+                    raw_sent_at = last_msg["sent_at"]
+                    try:
+                        if raw_sent_at.endswith("Z"):
+                            last_sent = datetime.fromisoformat(raw_sent_at.replace("Z", "+00:00")).astimezone(BRT)
+                        else:
+                            last_sent = datetime.fromisoformat(raw_sent_at)
+                            if last_sent.tzinfo is None:
+                                last_sent = last_sent.replace(tzinfo=BRT)
+                            else:
+                                last_sent = last_sent.astimezone(BRT)
+
+                        now_brt = datetime.now(BRT)
+                        days_since = (now_brt.date() - last_sent.date()).days
+                    except Exception as e:
+                        logger.warning(
+                            f"@{rest_username} | Erro ao interpretar sent_at='{raw_sent_at}' ({e}) → tratando como em descanso. Pulando."
+                        )
+                        continue
+
                     if days_since < self.rest_days:
                         logger.info(
                             f"@{rest_username} | Último envio há {days_since} dia(s) → em descanso ({self.rest_days} dias). Pulando."
                         )
                         continue
+
+                # Escolha da persona respeitando descanso e evitando repetição imediata
+                persona_index = base_persona_index
+                if last_msg:
+                    last_persona_id = last_msg.get("persona_id")
+                    if last_persona_id is not None and last_persona_id == personas[persona_index]["id"]:
+                        persona_index = (persona_index + 1) % len(personas)
+
+                persona = personas[persona_index]
 
                 # Cliente do Instagram configurado com intervalo de espera configurável
                 client = InstagramClient(
@@ -291,22 +337,39 @@ class CarouselAutomator:
                     wait_max_seconds=self.wait_max_seconds,
                 )
 
-                # Antes de enviar DM, checa/atualiza relação de follow
-                if not self._ensure_mutual_follow(client, restaurant, persona):
-                    # Standby: não envia mensagem enquanto follow não for mútuo
-                    continue
-
                 # Seleciona próxima frase garantindo que não repete imediatamente
                 last_phrase_id = last_msg.get("phrase_id") if last_msg else None
                 next_phrase = self._get_next_phrase(phrases, last_phrase_id)
 
-                success = client.send_dm(rest_username, next_phrase["text"])
+                # 1) Primeiro tenta enviar diretamente todas as partes da mensagem
+                success, failed_index = self._send_multipart_dm(
+                    client,
+                    rest_username,
+                    next_phrase["text"],
+                    start_index=0,
+                )
+
+                # 2) Se alguma parte falhar, aplica lógica de follow mútuo e retenta
+                if not success:
+                    logger.warning(
+                        f"Falha ao enviar para @{rest_username} na primeira tentativa, checando follow..."
+                    )
+
+                    if self._ensure_mutual_follow(client, restaurant, persona):
+                        # Retoma a partir da parte que falhou, se conhecida
+                        retry_start_index = failed_index if failed_index is not None else 0
+                        success, _ = self._send_multipart_dm(
+                            client,
+                            rest_username,
+                            next_phrase["text"],
+                            start_index=retry_start_index,
+                        )
 
                 # Emite evento para frontend via websocket hub (database-api).
                 # A emissão real é feita em `_log_message`, que tenta enriquecer o evento.
 
                 if not success:
-                    logger.warning(f"Falha ao enviar para @{rest_username}")
+                    logger.warning(f"Falha ao enviar para @{rest_username} mesmo após checar follow")
 
                 self._log_message(rest_id, persona["id"], next_phrase["id"], success)
 
