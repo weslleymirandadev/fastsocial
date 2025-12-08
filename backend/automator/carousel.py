@@ -91,16 +91,22 @@ class CarouselAutomator:
         }
 
         try:
-            # Send event to the database API
+            # Persist log + emitir evento via database-api (/log/ já grava em MessageLog e dispara WS)
             response = requests.post(
-                f"{self.db_url}/automation/emit",
-                json=event,
-                timeout=3
+                f"{self.db_url}/log/",
+                json={
+                    "restaurant_id": restaurant_id,
+                    "persona_id": persona_id,
+                    "phrase_id": phrase_id,
+                    "success": bool(success),
+                    "automation_run_id": self.automation_run_id,
+                },
+                timeout=5,
             )
-            if response.status_code != 200:
-                logger.error(f"Failed to emit event: {response.status_code} - {response.text}")
+            if response.status_code not in (200, 201):
+                logger.error(f"Failed to log message: {response.status_code} - {response.text}")
         except Exception as e:
-            logger.error(f"Failed to send event to WebSocket hub: {e}")
+            logger.error(f"Failed to log message to database-api: {e}")
 
     def _get_next_phrase(self, phrases: List[Dict], last_phrase_id: Optional[int]) -> Dict:
         """Seleciona aleatoriamente uma frase garantindo diversidade.
@@ -114,17 +120,26 @@ class CarouselAutomator:
         if not phrases:
             raise ValueError("Lista de frases vazia")
 
-        if last_phrase_id is None or len(phrases) == 1:
-            return random.choice(phrases)
+        # Se só existe uma frase, não há sequência possível
+        if len(phrases) == 1:
+            return phrases[0]
 
-        # Tenta algumas vezes evitar repetir a última frase
-        for _ in range(10):
-            candidate = random.choice(phrases)
-            if candidate.get("id") != last_phrase_id:
-                return candidate
+        # Frases já chegam ordenadas por `order` em _get_phrases
+        # Na primeira vez (sem histórico), começa pela primeira
+        if last_phrase_id is None:
+            return phrases[0]
 
-        # Fallback: se não conseguir (ids estranhos), retorna qualquer uma
-        return random.choice(phrases)
+        # Mapa id -> índice para localizar a última frase enviada
+        index_by_id = {p.get("id"): idx for idx, p in enumerate(phrases)}
+        last_idx = index_by_id.get(last_phrase_id)
+
+        # Se não encontrar o id, volta para a primeira frase
+        if last_idx is None:
+            return phrases[0]
+
+        # Próxima frase na sequência; se estiver no fim, volta para o início
+        next_idx = (last_idx + 1) % len(phrases)
+        return phrases[next_idx]
 
     def _update_follow_status(
         self,
@@ -221,12 +236,25 @@ class CarouselAutomator:
 
         for idx in range(start_index, len(parts)):
             part = parts[idx]
+
+            # Substitui placeholder de saudação dinâmica pelo cumprimento adequado em BRT
+            if "%saudação%" in part:
+                now_brt = datetime.now(BRT)
+                hour = now_brt.hour
+                if 5 <= hour < 12:
+                    saudacao = "Bom dia"
+                elif 12 <= hour < 18:
+                    saudacao = "Boa tarde"
+                else:
+                    saudacao = "Boa noite"
+                part = part.replace("%saudação%", saudacao)
+
             part_success = client.send_dm(username, part)
+
             if not part_success:
                 overall_success = False
                 failed_index = idx
                 break
-            time.sleep(random.randint(5, 10))
 
         return overall_success, failed_index
 
@@ -275,6 +303,9 @@ class CarouselAutomator:
             # Base do carrossel de personas: bloco 1 → persona 1, bloco 2 → persona 2, etc.
             base_persona_index = (block_number - 1) % len(personas)
 
+            # Mantém um cache de clientes Instagram por persona dentro do bloco
+            persona_clients: Dict[int, InstagramClient] = {}
+
             logger.info(
                 f"Processando Bloco {block_number} → persona base index={base_persona_index} "
                 f"→ {len(block_restaurants)} restaurantes"
@@ -285,6 +316,9 @@ class CarouselAutomator:
             if not phrases:
                 logger.error("Nenhuma frase configurada! Pulando bloco.")
                 continue
+
+            # Índice de frase dentro do bloco: restaurante 0 -> frase 0, restaurante 1 -> frase 1, ...
+            phrase_index = 0
 
             for restaurant in block_restaurants:
                 rest_id = restaurant["id"]
@@ -330,16 +364,22 @@ class CarouselAutomator:
                 persona = personas[persona_index]
 
                 # Cliente do Instagram configurado com intervalo de espera configurável
-                client = InstagramClient(
-                    username=persona["instagram_username"],
-                    password=persona["instagram_password"],
-                    wait_min_seconds=self.wait_min_seconds,
-                    wait_max_seconds=self.wait_max_seconds,
-                )
+                # Reutiliza o mesmo client para a mesma persona dentro do bloco
+                persona_id = persona["id"]
+                client = persona_clients.get(persona_id)
+                if client is None:
+                    client = InstagramClient(
+                        username=persona["instagram_username"],
+                        password=persona["instagram_password"],
+                        wait_min_seconds=self.wait_min_seconds,
+                        wait_max_seconds=self.wait_max_seconds,
+                    )
+                    persona_clients[persona_id] = client
 
-                # Seleciona próxima frase garantindo que não repete imediatamente
-                last_phrase_id = last_msg.get("phrase_id") if last_msg else None
-                next_phrase = self._get_next_phrase(phrases, last_phrase_id)
+                # Seleciona frase em carrossel por bloco:
+                # restaurante 0 -> frase 0, restaurante 1 -> frase 1, se acabar volta para frase 0
+                next_phrase = phrases[phrase_index % len(phrases)]
+                phrase_index += 1
 
                 # 1) Primeiro tenta enviar diretamente todas as partes da mensagem
                 success, failed_index = self._send_multipart_dm(
