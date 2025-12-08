@@ -1,6 +1,7 @@
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+
 import requests
 import time
 import logging
@@ -71,6 +72,33 @@ async def proxy(request: Request, path: str):
         return JSONResponse(content={"text": resp.text}, status_code=resp.status_code)
 
     return JSONResponse(content=data, status_code=resp.status_code)
+
+
+@app.get("/reports/messages.xlsx")
+async def proxy_messages_report(request: Request):
+    """Proxy para o relatório XLSX de mensagens na database-api.
+
+    Preserva o conteúdo XLSX para o frontend baixar diretamente.
+    """
+    url = f"{settings.DATABASE_API_URL}/reports/messages.xlsx"
+    try:
+        resp = requests.get(url, params=dict(request.query_params), timeout=60)
+    except Exception as e:
+        return JSONResponse(content={"error": "upstream request failed", "detail": str(e)}, status_code=502)
+
+    return Response(
+        content=resp.content,
+        media_type=resp.headers.get(
+            "content-type",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        status_code=resp.status_code,
+        headers={
+            "Content-Disposition": resp.headers.get(
+                "content-disposition", "attachment; filename=messages_report.xlsx"
+            )
+        },
+    )
 
 
 # === Configuração dinâmica ===

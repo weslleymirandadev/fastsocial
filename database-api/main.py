@@ -1,10 +1,16 @@
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
+
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from sqlalchemy import func
 import asyncio
 from collections import deque
+import csv
+import io
+from datetime import datetime, timedelta
+from openpyxl import Workbook
 
 from database.models import (
     Base,
@@ -27,6 +33,7 @@ from schemas.phrase import (
 )
 
 from database.database import engine
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
@@ -414,11 +421,13 @@ async def log_sent_message(payload: dict, db: Session = Depends(get_db)):
     persona = db.query(Persona).filter(Persona.id == persona_id).first()
     phrase = db.query(Phrase).filter(Phrase.id == phrase_id).first()
 
+    ts = log.sent_at.isoformat() if log.sent_at else None
+
     event = {
         "type": "dm_log",
         "id": log.id,
         "success": success,
-        "sent_at": log.sent_at.isoformat() if log.sent_at else None,
+        "sent_at": ts,
         "automation_run_id": automation_run_id,
         "stats": dm_stats,
         "restaurant": {
@@ -437,6 +446,32 @@ async def log_sent_message(payload: dict, db: Session = Depends(get_db)):
             "text": getattr(phrase, "text", None),
         },
     }
+
+    # Linha de log pré-formatada para o frontend (não inclui texto da frase)
+    try:
+        ts_display = ""
+        if ts:
+            from datetime import datetime
+
+            ts_display = datetime.fromisoformat(ts).time().strftime("%H:%M:%S")
+        status = "OK" if success else "FAIL"
+        rest_username = getattr(restaurant, "instagram_username", None) if restaurant else None
+        rest_name = getattr(restaurant, "name", None) if restaurant else None
+        rest_bloco = getattr(restaurant, "bloco", None) if restaurant else None
+        persona_username = getattr(persona, "instagram_username", None) if persona else None
+        persona_name = getattr(persona, "name", None) if persona else None
+        phrase_id_display = phrase.id if phrase else phrase_id
+
+        line = (
+            f"[{ts_display}] {status} "
+            f"restaurante=@{rest_username or '?'} (id={restaurant.id if restaurant else restaurant_id}, bloco={rest_bloco if rest_bloco is not None else '-'}, nome={rest_name or '?'}) | "
+            f"persona=@{persona_username or '?'} (id={persona.id if persona else persona_id}, nome={persona_name or '?'}) | "
+            f"frase#{phrase_id_display or '?'}"
+        )
+        event["line"] = line
+    except Exception:
+        # Em caso de erro de formatação, simplesmente não inclui 'line'
+        pass
 
     # adiciona ao buffer de eventos recentes
     recent_events.append(event)
@@ -624,6 +659,110 @@ def config_action(payload: dict, db: Session = Depends(get_db)):
 
     db.commit()
     return {"status": "ok", "results": results}
+
+# ======================
+# RELATÓRIOS XLSX
+# ======================
+@app.get("/reports/messages.xlsx")
+def messages_report(
+    period: str = "all",  # "week", "month", "all"
+    persona_id: Optional[int] = None,
+    restaurant_id: Optional[int] = None,
+    status: str = "all",  # "all", "success", "fail"
+    db: Session = Depends(get_db),
+):
+    """Exporta histórico de mensagens em XLSX.
+
+    period:
+      - "week": últimos 7 dias
+      - "month": desde o primeiro dia do mês atual
+      - "all": todo o período
+
+    status:
+      - "all": todos
+      - "success": apenas sucessos
+      - "fail": apenas falhas
+    """
+
+    now = datetime.utcnow()
+    start_dt: datetime | None = None
+
+    p = (period or "").lower()
+    if p == "week":
+        start_dt = now - timedelta(days=7)
+    elif p == "month":
+        start_dt = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start_dt = None  # all
+
+    q = (
+        db.query(MessageLog, Restaurant, Persona, Phrase)
+        .join(Restaurant, MessageLog.restaurant_id == Restaurant.id)
+        .join(Persona, MessageLog.persona_id == Persona.id)
+        .join(Phrase, MessageLog.phrase_id == Phrase.id)
+    )
+
+    if start_dt is not None:
+        q = q.filter(MessageLog.sent_at >= start_dt)
+    if persona_id is not None:
+        q = q.filter(MessageLog.persona_id == persona_id)
+    if restaurant_id is not None:
+        q = q.filter(MessageLog.restaurant_id == restaurant_id)
+
+    s = (status or "").lower()
+    if s == "success":
+        q = q.filter(MessageLog.success.is_(True))
+    elif s == "fail":
+        q = q.filter(MessageLog.success.is_(False))
+
+    q = q.order_by(MessageLog.sent_at.asc())
+
+    # Cria planilha XLSX em memória
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Mensagens"
+
+    # Cabeçalho com nomes mais intuitivos e apenas campos cruciais
+    ws.append(
+        [
+            "Data envio",
+            "Status",
+            "Restaurante (username)",
+            "Restaurante (nome)",
+            "Bloco",
+            "Persona (username)",
+            "Persona (nome)",
+            "Frase ID",
+            "Texto da frase",
+        ]
+    )
+
+    for log, restaurant, persona, phrase in q.all():
+        status_label = "Sucesso" if log.success else "Falha"
+        sent_at_str = log.sent_at.isoformat() if log.sent_at else ""
+        ws.append(
+            [
+                sent_at_str,
+                status_label,
+                getattr(restaurant, "instagram_username", "") if restaurant else "",
+                getattr(restaurant, "name", "") if restaurant else "",
+                getattr(restaurant, "bloco", "") if restaurant else "",
+                getattr(persona, "instagram_username", "") if persona else "",
+                getattr(persona, "name", "") if persona else "",
+                phrase.id if phrase else log.phrase_id,
+                getattr(phrase, "text", "") if phrase else "",
+            ]
+        )
+
+    output = io.BytesIO()
+    wb.save(output)
+    xlsx_data = output.getvalue()
+    return Response(
+        content=xlsx_data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=messages_report.xlsx"},
+    )
+
 
 # ======================
 # HEALTH CHECK

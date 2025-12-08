@@ -5,9 +5,10 @@ import { PersonasTab } from "./components/PersonasTab";
 import { PhrasesTab } from "./components/PhrasesTab";
 import { ConfigTab } from "./components/ConfigTab";
 import { AutomationTab } from "./components/AutomationTab";
+import { ReportsTab } from "./components/ReportsTab";
 
 function App() {
-  const [activeTab, setActiveTab] = useState<TabId>("restaurants");
+  const [activeTab, setActiveTab] = useState<TabId>("automation");
 
   function renderTabButton(id: TabId, label: string) {
     const isActive = activeTab === id;
@@ -32,6 +33,7 @@ function App() {
     if (activeTab === "phrases") return <PhrasesTab />;
     if (activeTab === "config") return <ConfigTab />;
     if (activeTab === "automation") return <AutomationTab />;
+    if (activeTab === "reports") return <ReportsTab />;
     return null;
   }
 
@@ -52,6 +54,7 @@ function App() {
               {renderTabButton("phrases", "Frases")}
               {renderTabButton("config", "Config")}
               {renderTabButton("automation", "Automação")}
+              {renderTabButton("reports", "Relatórios")}
             </div>
           </div>
 
