@@ -1,4 +1,4 @@
-export type TabId = "restaurants" | "personas" | "phrases" | "config" | "automation";
+export type TabId = "restaurants" | "personas" | "phrases" | "config" | "automation" | "reports";
 
 export interface Restaurant {
   id: number;
