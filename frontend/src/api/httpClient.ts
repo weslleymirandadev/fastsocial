@@ -4,7 +4,7 @@ export interface ApiRequestOptions extends RequestInit {
   method?: HttpMethod;
 }
 
-const BACKEND_BASE_URL = "http://localhost:8000";
+export const BACKEND_BASE_URL = "http://localhost:8000";
 
 export async function apiRequest<T = unknown>(
   path: string,
