@@ -212,6 +212,9 @@ export function PhrasesTab() {
       <div className="grid md:grid-cols-2 gap-6">
         <div className="space-y-2">
           <h3 className="text-sm font-medium text-slate-200">Nova frase</h3>
+          <p className="text-slate-400 text-xs mt-1">
+            Para saudação automática com base no horário use "%saudação%".
+          </p>
           <div className="space-y-2 text-sm">
             <textarea
               className="w-full rounded-md bg-slate-900 border border-slate-700 px-2 py-1 min-h-20 text-xs"
@@ -232,9 +235,7 @@ export function PhrasesTab() {
               <button
                 onClick={handleCreate}
                 disabled={creating}
-                className={`px-3 py-1 rounded-md bg-emerald-600 text-xs font-medium${
-                  creating ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500"
-                }`}
+                className={`px-3 py-1 rounded-md bg-emerald-600 text-xs font-medium${creating ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500"}`}
               >
                 {creating ? "Salvando..." : "Salvar"}
               </button>
@@ -307,9 +308,7 @@ export function PhrasesTab() {
             <button
               onClick={handleUpdate}
               disabled={updating}
-              className={`px-3 py-1 rounded-md bg-emerald-600 text-xs font-medium${
-                updating ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500"
-              }`}
+              className={`px-3 py-1 rounded-md bg-emerald-600 text-xs font-medium${updating ? " cursor-not-allowed opacity-50" : " hover:bg-emerald-500" }`}
             >
               {updating ? "Atualizando..." : "Atualizar"}
             </button>
