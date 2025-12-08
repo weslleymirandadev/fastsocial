@@ -63,7 +63,16 @@ export function AutomationConsole() {
             break;
           case "history":
             if (Array.isArray(data.items)) {
-              data.items.forEach(handleDmLog);
+              data.items.forEach((item: any) => {
+                if (!item || typeof item !== "object") return;
+                if (item.type === "system_log") {
+                  handleSystemLog(item);
+                } else if (item.type === "dm_log") {
+                  handleDmLog(item);
+                } else if (item.type === "stats" && item.stats) {
+                  updateStats(item.stats);
+                }
+              });
             }
             break;
           default:
@@ -85,29 +94,11 @@ export function AutomationConsole() {
     };
 
     const handleDmLog = (event: any) => {
-      // Update stats if available
+      // Para dm_log, usamos apenas para atualizar as estatísticas,
+      // sem adicionar linhas no console (console fica para system_log).
       if (event.stats) {
         updateStats(event.stats);
       }
-
-      // Format the log line
-      const ts = event.sent_at ? new Date(event.sent_at).toLocaleTimeString() : "";
-      const status = event.success ? "OK" : "FAIL";
-      const rest = event.restaurant || {};
-      const persona = event.persona || {};
-      const phrase = event.phrase || {};
-
-      const line =
-        `[${ts}] ${status} ` +
-        `restaurante=@${rest.instagram_username || "?"} (id=${rest.id ?? "?"}, bloco=${rest.bloco ?? "-"}, nome=${rest.name ?? "?"}) | ` +
-        `persona=@${persona.instagram_username || "?"} (id=${persona.id ?? "?"}, nome=${persona.name ?? "?"}) | ` +
-        `frase#${phrase.id ?? "?"}: ${String(phrase.text || "").slice(0, 80)}`;
-
-      // Add to log lines
-      setLines(prev => {
-        const next = [...prev, line];
-        return next.slice(-50); // Keep only the last 50 lines
-      });
     };
 
     const handleSystemLog = (event: any) => {
