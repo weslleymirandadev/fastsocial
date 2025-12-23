@@ -63,7 +63,7 @@ class RestaurantUpdate(BaseModel):
     """
     instagram_username: Optional[str] = Field(None, max_length=100)
     name: Optional[str] = Field(None, max_length=200)
-    bloco: Optional[int] = Field(None, ge=1, description="Bloco de restaurante")
+    bloco: Optional[int] = Field(None, ge=0, description="Bloco de restaurante")
 
     @validator("instagram_username", pre=True, always=True)
     def clean_username_update(cls, v):
