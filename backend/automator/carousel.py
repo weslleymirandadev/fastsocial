@@ -226,10 +226,23 @@ class CarouselAutomator:
         text: str,
         start_index: int = 0,
     ) -> (bool, Optional[int]):
+        """Envia mensagem multipart separada por ';' com intervalos variáveis entre partes."""
         parts = [p.strip() for p in text.split(";") if p.strip()]
 
         if not parts:
             return False, None
+
+        # Abre a conversa uma vez no início (apenas se for a primeira parte)
+        # Se for retry (start_index > 0), tenta reabrir a conversa caso tenha fechado
+        if start_index == 0:
+            if not client.open_dm_conversation(username):
+                logger.error(f"Não foi possível abrir conversa com @{username}")
+                return False, None
+        else:
+            # Em caso de retry, tenta reabrir a conversa (pode ter fechado após erro)
+            logger.info(f"Retry: tentando reabrir conversa com @{username} para continuar do índice {start_index}")
+            if not client.open_dm_conversation(username):
+                logger.warning(f"Não foi possível reabrir conversa com @{username}, tentando continuar mesmo assim...")
 
         overall_success = True
         failed_index: int | None = None
@@ -238,6 +251,7 @@ class CarouselAutomator:
             part = parts[idx]
 
             # Substitui placeholder de saudação dinâmica pelo cumprimento adequado em BRT
+            # A hora é verificada no momento do envio de cada parte
             if "%saudação%" in part:
                 now_brt = datetime.now(BRT)
                 hour = now_brt.hour
@@ -249,12 +263,24 @@ class CarouselAutomator:
                     saudacao = "Boa noite"
                 part = part.replace("%saudação%", saudacao)
 
+            # Envia a parte da mensagem (já estamos na conversa)
             part_success = client.send_dm(username, part)
 
             if not part_success:
                 overall_success = False
                 failed_index = idx
                 break
+
+            # Intervalo variável entre partes (exceto na última parte)
+            if idx < len(parts) - 1:
+                # Intervalo entre mensagens: varia entre wait_min_seconds e wait_max_seconds
+                # com alguma variação adicional para parecer mais humano
+                interval = random.uniform(
+                    self.wait_min_seconds * 0.8,
+                    self.wait_max_seconds * 1.2
+                )
+                logger.debug(f"Aguardando {interval:.2f}s antes de enviar próxima parte da mensagem")
+                time.sleep(interval)
 
         return overall_success, failed_index
 
@@ -414,6 +440,15 @@ class CarouselAutomator:
                 self._log_message(rest_id, persona["id"], next_phrase["id"], success)
 
             logger.info(f"Bloco {block_number} concluído!\n")
+            
+            # Fecha os drivers do bloco para liberar recursos
+            # (Os drivers serão recriados no próximo bloco se necessário)
+            for client in persona_clients.values():
+                try:
+                    client.quit()
+                except Exception as e:
+                    logger.debug(f"Erro ao fechar driver: {e}")
+            persona_clients.clear()
 
         logger.info("Automação finalizada com sucesso!")
 
