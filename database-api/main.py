@@ -234,6 +234,12 @@ def delete_restaurant(restaurant_id: int, db: Session = Depends(get_db)):
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurante não encontrado")
 
+    # Deleta registros relacionados em MessageLog
+    db.query(MessageLog).filter(MessageLog.restaurant_id == restaurant_id).delete()
+    
+    # Deleta registros relacionados em FollowStatus
+    db.query(FollowStatus).filter(FollowStatus.restaurant_id == restaurant_id).delete()
+
     db.delete(restaurant)
     db.commit()
     return {"status": "deleted"}
@@ -315,6 +321,12 @@ def delete_persona(persona_id: int, db: Session = Depends(get_db)):
     persona = db.query(Persona).filter(Persona.id == persona_id).first()
     if not persona:
         raise HTTPException(status_code=404, detail="Persona não encontrada")
+
+    # Deleta registros relacionados em MessageLog
+    db.query(MessageLog).filter(MessageLog.persona_id == persona_id).delete()
+    
+    # Deleta registros relacionados em FollowStatus
+    db.query(FollowStatus).filter(FollowStatus.persona_id == persona_id).delete()
 
     db.delete(persona)
     db.commit()
