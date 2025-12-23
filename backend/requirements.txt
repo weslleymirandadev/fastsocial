@@ -2,5 +2,5 @@ fastapi
 uvicorn[standard]
 pydantic==2.11.7
 pydantic_settings
-instagrapi
+selenium>=4.15.0
 requests
