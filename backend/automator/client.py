@@ -48,6 +48,11 @@ except Exception:
     pass
 
 
+class LoginError(Exception):
+    """Exceção lançada quando há erro de login (ex: senha incorreta)."""
+    pass
+
+
 class InstagramClient:
     def __init__(
         self,
@@ -58,7 +63,7 @@ class InstagramClient:
         headless: bool = False,
     ):
         self.username = username.strip().lower().replace("@", "")
-        self.password = password
+        self.password = password.strip()
         self.wait_min_seconds = wait_min_seconds
         self.wait_max_seconds = max(wait_max_seconds, wait_min_seconds)
         self.headless = headless
@@ -213,19 +218,96 @@ class InstagramClient:
         self._human_delay(0.3, 0.8)
 
     def _human_click(self, element) -> None:
-        """Clica em elemento simulando movimento humano."""
+        """Clica em elemento simulando movimento humano com arrasto lento do mouse."""
         try:
-            # Move o mouse até o elemento
+            # Obtém a localização e tamanho do elemento
+            location = element.location
+            size = element.size
+            element_center_x = location['x'] + size['width'] // 2
+            element_center_y = location['y'] + size['height'] // 2
+            
+            # Obtém o tamanho do viewport
+            viewport_width = self.driver.execute_script("return window.innerWidth")
+            viewport_height = self.driver.execute_script("return window.innerHeight")
+            
+            # Calcula uma posição inicial próxima ao elemento (mas não muito perto)
+            distance_from_element = random.randint(80, 200)
+            start_x = element_center_x + int(distance_from_element * random.uniform(-0.8, 0.8))
+            start_y = element_center_y + int(distance_from_element * random.uniform(-0.8, 0.8))
+            
+            # Garante que está dentro do viewport
+            start_x = max(50, min(start_x, viewport_width - 50))
+            start_y = max(50, min(start_y, viewport_height - 50))
+            
+            # Calcula a distância total
+            dx = element_center_x - start_x
+            dy = element_center_y - start_y
+            
+            # Número de passos para movimento gradual (mais passos = mais lento)
+            num_steps = random.randint(12, 18)
+            
             actions = ActionChains(self.driver)
+            
+            # Move para uma posição inicial conhecida (canto superior esquerdo do viewport)
+            # Isso reseta a referência para offsets relativos
+            actions.move_by_offset(-viewport_width // 2, -viewport_height // 2)
+            actions.pause(random.uniform(0.05, 0.1))
+            
+            # Move para a posição inicial calculada
+            actions.move_by_offset(start_x, start_y)
+            actions.pause(random.uniform(0.15, 0.25))
+            
+            # Move gradualmente em pequenos passos até o elemento
+            prev_x, prev_y = start_x, start_y
+            for i in range(num_steps):
+                # Calcula o progresso (0 a 1)
+                progress = (i + 1) / num_steps
+                
+                # Usa uma curva de easing para movimento mais natural
+                # Easing out: começa rápido e termina devagar
+                eased_progress = 1 - (1 - progress) ** 2
+                
+                # Calcula a posição atual na trajetória
+                current_x = start_x + dx * eased_progress
+                current_y = start_y + dy * eased_progress
+                
+                # Calcula o offset relativo ao passo anterior
+                offset_x = current_x - prev_x
+                offset_y = current_y - prev_y
+                
+                # Adiciona um pouco de variação aleatória para parecer mais humano
+                noise_x = random.uniform(-1.5, 1.5)
+                noise_y = random.uniform(-1.5, 1.5)
+                
+                # Move para a próxima posição (offset relativo)
+                actions.move_by_offset(int(offset_x + noise_x), int(offset_y + noise_y))
+                # Pausa entre movimentos (mais lento para simular arrasto)
+                actions.pause(random.uniform(0.1, 0.18))
+                
+                prev_x, prev_y = current_x, current_y
+            
+            # Garante que está exatamente no elemento
             actions.move_to_element(element)
-            actions.pause(random.uniform(0.1, 0.3))
+            actions.pause(random.uniform(0.15, 0.3))
+            
+            # Clica no elemento
             actions.click()
             actions.perform()
             self._human_delay(0.5, 1.0)
         except Exception as e:
-            logger.warning(f"Erro ao clicar humanamente, tentando click direto: {e}")
-            element.click()
-            self._human_delay(0.5, 1.0)
+            try:
+                # Fallback: movimento mais simples mas ainda gradual
+                actions = ActionChains(self.driver)
+                # Move para o elemento com pausa maior para simular movimento lento
+                actions.move_to_element(element)
+                actions.pause(random.uniform(0.3, 0.6))
+                actions.click()
+                actions.perform()
+                self._human_delay(0.5, 1.0)
+            except Exception as e2:
+                logger.warning(f"Erro no fallback, usando click direto: {e2}")
+                element.click()
+                self._human_delay(0.5, 1.0)
 
     def _random_mouse_movement(self) -> None:
         """Move o mouse aleatoriamente para parecer humano."""
@@ -631,87 +713,55 @@ class InstagramClient:
                 # Delay um pouco maior para senha (mais seguro)
                 time.sleep(random.uniform(0.08, 0.15))
             
-            self._human_delay(0.5, 1.0)
+            # Aguarda um pouco após digitar a senha
+            self._human_delay(1.0, 1.5)
             
-            # Clica no botão de login
-            login_button_selectors = [
-                'button[type="submit"]',
-                'button:contains("Log in")',
-                'button:contains("Entrar")',
-            ]
-            
-            login_button = None
-            for selector in login_button_selectors:
-                try:
-                    if "contains" in selector:
-                        # XPath para texto
-                        login_button = self.driver.find_element(
-                            By.XPATH, 
-                            "//button[contains(text(), 'Log in') or contains(text(), 'Entrar')]"
-                        )
-                    else:
-                        login_button = self.driver.find_element(By.CSS_SELECTOR, selector)
-                    if login_button.is_enabled():
-                        break
-                except NoSuchElementException:
-                    continue
-            
-            if login_button:
-                self._human_click(login_button)
-            else:
-                # Fallback: Enter no campo de senha
-                password_input.send_keys(Keys.RETURN)
-            
-            self._human_delay(3, 6)
-            
-            # Verifica se login foi bem-sucedido ou se há desafio
-            current_url = self.driver.current_url
-            
-            # Se ainda está na página de login, pode ter falhado
-            if "login" in current_url.lower():
-                # Verifica se há mensagem de erro
-                error_selectors = [
-                    'div[role="alert"]',
-                    'p[data-testid*="error"]',
-                    '*[class*="error"]',
+            # Tenta encontrar e clicar no botão "Mostrar" para mostrar a senha
+            try:
+                show_button_selectors = [
+                    "//button[contains(text(), 'Mostrar')]",
+                    "//button[contains(text(), 'Show')]",
+                    "//button[@aria-label='Mostrar']",
+                    "//button[@aria-label='Show']",
                 ]
-                error_found = False
-                for selector in error_selectors:
+                
+                show_button = None
+                for selector in show_button_selectors:
                     try:
-                        error_elem = self.driver.find_element(By.CSS_SELECTOR, selector)
-                        if error_elem.is_displayed():
-                            error_text = error_elem.text
-                            logger.warning(f"Erro de login detectado: {error_text}")
-                            error_found = True
+                        show_button = self.driver.find_element(By.XPATH, selector)
+                        if show_button.is_displayed() and show_button.is_enabled():
+                            logger.info("Botão 'Mostrar' encontrado. Clicando...")
+                            self._human_click(show_button)
+                            self._human_delay(0.5, 1.0)
                             break
                     except NoSuchElementException:
                         continue
                 
-                if error_found:
-                    raise Exception("Falha no login: credenciais inválidas ou erro detectado")
+                if not show_button:
+                    logger.debug("Botão 'Mostrar' não encontrado. Continuando...")
+            except Exception as e:
+                logger.debug(f"Erro ao procurar botão 'Mostrar': {e}. Continuando...")
             
-            # Verifica desafios (challenge)
-            if "challenge" in current_url.lower() or "accounts/challenge" in current_url:
-                logger.warning("Desafio do Instagram detectado. Aguardando resolução manual...")
-                # Aguarda até que o usuário resolva manualmente ou a URL mude
-                wait.until(
-                    lambda d: "challenge" not in d.current_url.lower() or "accounts/login" in d.current_url.lower(),
-                    message="Aguardando resolução de desafio..."
-                )
-                time.sleep(2)
-                current_url = self.driver.current_url
+            # Aguarda um pouco antes de tentar fazer login
+            self._human_delay(0.8, 1.2)
             
-            # Verifica se está na página inicial (login bem-sucedido)
-            if "instagram.com" in current_url and "login" not in current_url.lower():
-                logger.info(f"Login bem-sucedido para @{self.username}")
-                self._human_delay(2, 4)
-                
-                # Fecha popups comuns (salvar informações, notificações, etc)
-                self._dismiss_popups()
-                return
+            password_input.send_keys(Keys.RETURN)
             
-            # Se chegou aqui, login pode ter falhado
-            raise Exception("Login não foi completado com sucesso")
+            self._human_delay(3, 6)
+            
+            # Verifica se há mensagem de erro de senha incorreta
+            page_source = self.driver.page_source
+            if "Sua senha está incorreta. Confira-a" in page_source:
+                logger.warning(f"Erro de login detectado: senha incorreta para @{self.username}. Passando para próxima persona.")
+                raise LoginError(f"Senha incorreta para @{self.username}")
+            
+            # Se não houve erro, assume que login foi bem-sucedido
+            logger.info(f"Login bem-sucedido para @{self.username}")
+            self._human_delay(2, 4)
+            
+            # Fecha popups comuns (salvar informações, notificações, etc)
+            self._dismiss_popups()
+            return
             
         except Exception as e:
             logger.error(f"Erro durante login para @{self.username}: {e}")

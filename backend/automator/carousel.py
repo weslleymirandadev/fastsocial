@@ -5,7 +5,7 @@ import random
 import time
 from collections import defaultdict
 from typing import List, Dict, Any, Optional
-from .client import InstagramClient
+from .client import InstagramClient, LoginError
 from config import settings
 
 logging.basicConfig(level=logging.INFO)
@@ -394,13 +394,34 @@ class CarouselAutomator:
                 persona_id = persona["id"]
                 client = persona_clients.get(persona_id)
                 if client is None:
-                    client = InstagramClient(
-                        username=persona["instagram_username"],
-                        password=persona["instagram_password"],
-                        wait_min_seconds=self.wait_min_seconds,
-                        wait_max_seconds=self.wait_max_seconds,
-                    )
-                    persona_clients[persona_id] = client
+                    try:
+                        client = InstagramClient(
+                            username=persona["instagram_username"],
+                            password=persona["instagram_password"],
+                            wait_min_seconds=self.wait_min_seconds,
+                            wait_max_seconds=self.wait_max_seconds,
+                        )
+                        persona_clients[persona_id] = client
+                    except LoginError as e:
+                        logger.error(f"Erro de login para persona @{persona.get('instagram_username')}: {e}. Tentando próxima persona.")
+                        # Tenta próxima persona para o mesmo restaurante
+                        persona_index = (persona_index + 1) % len(personas)
+                        persona = personas[persona_index]
+                        persona_id = persona["id"]
+                        
+                        # Tenta criar cliente para a próxima persona
+                        try:
+                            client = InstagramClient(
+                                username=persona["instagram_username"],
+                                password=persona["instagram_password"],
+                                wait_min_seconds=self.wait_min_seconds,
+                                wait_max_seconds=self.wait_max_seconds,
+                            )
+                            persona_clients[persona_id] = client
+                        except LoginError as e2:
+                            logger.error(f"Erro de login também para próxima persona @{persona.get('instagram_username')}: {e2}. Pulando restaurante.")
+                            # Se a próxima persona também falhar, pula este restaurante
+                            continue
 
                 # Seleciona frase em carrossel por bloco:
                 # restaurante 0 -> frase 0, restaurante 1 -> frase 1, se acabar volta para frase 0
