@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import type { Persona } from "../types/domain";
 import { fetchPersonas, createPersona, createPersonasBulk, updatePersona, deletePersona } from "../api/personasApi";
 
@@ -15,6 +15,7 @@ export function PersonasTab() {
   const [success, setSuccess] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   function resetMessages() {
     setError(null);
@@ -110,6 +111,16 @@ export function PersonasTab() {
       event.target.value = "";
     }
   }
+
+  const filteredPersonas = useMemo(() => {
+    if (!searchQuery.trim()) return personas;
+    const query = searchQuery.toLowerCase();
+    return personas.filter(
+      (p) =>
+        p.name.toLowerCase().includes(query) ||
+        p.instagram_username.toLowerCase().includes(query)
+    );
+  }, [personas, searchQuery]);
 
   useEffect(() => {
     loadPersonas(false);
@@ -237,9 +248,18 @@ export function PersonasTab() {
         </div>
 
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-slate-200">Lista</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-slate-200">Lista</h3>
+          </div>
+          <input
+            type="text"
+            className="w-full rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-sm mb-2"
+            placeholder="Buscar por nome ou username..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
           <div className="max-h-80 overflow-auto border border-slate-800 rounded-md divide-y divide-slate-800 text-sm">
-            {personas.map((p) => (
+            {filteredPersonas.map((p) => (
               <div key={p.id} className="px-2 py-2 flex items-center justify-between gap-2">
                 <div>
                   <div className="font-medium">{p.name}</div>
@@ -261,8 +281,10 @@ export function PersonasTab() {
                 </div>
               </div>
             ))}
-            {personas.length === 0 && (
-              <div className="px-3 py-4 text-xs text-slate-500">Nenhuma persona cadastrada.</div>
+            {filteredPersonas.length === 0 && (
+              <div className="px-3 py-4 text-xs text-slate-500">
+                {personas.length === 0 ? "Nenhuma persona cadastrada." : "Nenhuma persona encontrada."}
+              </div>
             )}
           </div>
         </div>
