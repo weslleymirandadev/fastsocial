@@ -15,6 +15,7 @@ export async function fetchPhrases(options?: { force?: boolean }): Promise<Phras
 export async function createPhrase(payload: {
   text: string;
   order: number;
+  cliente: boolean;
 }): Promise<void> {
   await apiRequest("/proxy/phrases/", {
     method: "POST",
@@ -26,6 +27,7 @@ export async function createPhrase(payload: {
 export async function createPhrasesBulk(payloads: {
   text: string;
   order: number;
+  cliente: boolean;
 }[]): Promise<void> {
   if (payloads.length === 0) return;
   await apiRequest("/phrases/bulk", {
@@ -38,6 +40,7 @@ export async function createPhrasesBulk(payloads: {
 export async function updatePhrase(id: number, payload: {
   text: string;
   order?: number | null;
+  cliente: boolean;
 }): Promise<void> {
   await apiRequest(`/proxy/phrases/${id}`, {
     method: "PUT",

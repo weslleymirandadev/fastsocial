@@ -1,16 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import type { Restaurant } from "../types/domain";
 import { fetchRestaurants, createRestaurant, createRestaurantsBulk, updateRestaurant, deleteRestaurant } from "../api/restaurantsApi";
 
 export function RestaurantsTab() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
-  const [newRestaurant, setNewRestaurant] = useState({ instagram_username: "", name: "", bloco: "" });
+  const [newRestaurant, setNewRestaurant] = useState({ instagram_username: "", name: "", bloco: "", cliente: false });
   const [editingRestaurant, setEditingRestaurant] = useState<Restaurant | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   function resetMessages() {
     setError(null);
@@ -29,6 +30,19 @@ export function RestaurantsTab() {
       setLoading(false);
     }
   }
+
+  const filteredRestaurants = useMemo(() => {
+    if (!searchQuery.trim()) return restaurants;
+    const query = searchQuery.toLowerCase();
+    return restaurants.filter(
+      (r) =>
+        r.instagram_username.toLowerCase().includes(query) ||
+        (r.name && r.name.toLowerCase().includes(query))
+    );
+  }, [restaurants, searchQuery]);
+
+  const clientes = useMemo(() => filteredRestaurants.filter((r) => r.cliente), [filteredRestaurants]);
+  const naoClientes = useMemo(() => filteredRestaurants.filter((r) => !r.cliente), [filteredRestaurants]);
 
   async function handleImportCsv(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -78,6 +92,7 @@ export function RestaurantsTab() {
         instagram_username: string;
         name: string;
         bloco?: number;
+        cliente: boolean;
       }[] = [];
 
       for (const row of rows) {
@@ -101,6 +116,7 @@ export function RestaurantsTab() {
           instagram_username: username,
           name,
           ...(typeof bloco === "number" ? { bloco } : {}),
+          cliente: false,
         });
         existing.add(username);
         created++;
@@ -136,9 +152,10 @@ export function RestaurantsTab() {
         instagram_username: newRestaurant.instagram_username,
         name: newRestaurant.name,
         ...(typeof bloco === "number" ? { bloco } : {}),
+        cliente: newRestaurant.cliente,
       });
       setSuccess("Restaurante criado");
-      setNewRestaurant({ instagram_username: "", name: "", bloco: "" });
+      setNewRestaurant({ instagram_username: "", name: "", bloco: "", cliente: false });
       await loadRestaurants();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao criar restaurante");
@@ -158,9 +175,11 @@ export function RestaurantsTab() {
         instagram_username: string;
         name?: string | null;
         bloco?: number;
+        cliente: boolean;
       } = {
         instagram_username: editingRestaurant.instagram_username,
         name: editingRestaurant.name ?? "",
+        cliente: editingRestaurant.cliente,
       };
 
       if (typeof editingRestaurant.bloco === "number") {
@@ -194,6 +213,40 @@ export function RestaurantsTab() {
     }
   }
 
+  function renderRestaurantList(list: Restaurant[], emptyMessage: string) {
+    return (
+      <div className="max-h-80 overflow-auto border border-slate-800 rounded-md divide-y divide-slate-800 text-sm">
+        {list.map((r) => (
+          <div key={r.id} className="px-2 py-2 flex items-center justify-between gap-2">
+            <div>
+              <div className="font-medium">@{r.instagram_username}</div>
+              <div className="text-xs text-slate-400">
+                {r.name || "(sem nome)"} {r.bloco !== null && r.bloco !== undefined ? `• Bloco ${r.bloco}` : "• Sem bloco"}
+              </div>
+            </div>
+            <div className="flex gap-1 text-xs">
+              <button
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700"
+                onClick={() => setEditingRestaurant(r)}
+              >
+                Editar
+              </button>
+              <button
+                className="px-2 py-0.5 rounded bg-red-700 hover:bg-red-600"
+                onClick={() => handleDelete(r.id)}
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
+        ))}
+        {list.length === 0 && (
+          <div className="px-3 py-4 text-xs text-slate-500">{emptyMessage}</div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
@@ -221,7 +274,7 @@ export function RestaurantsTab() {
       {error && <div className="text-xs text-red-400">{error}</div>}
       {success && <div className="text-xs text-emerald-400">{success}</div>}
 
-      <div className="grid md:grid-cols-2 gap-6">
+      <div className="grid md:grid-cols-1 gap-6">
         <div className="space-y-2">
           <h3 className="text-sm font-medium text-slate-200">Novo restaurante</h3>
           <div className="space-y-2 text-sm">
@@ -243,6 +296,15 @@ export function RestaurantsTab() {
               value={newRestaurant.bloco}
               onChange={(e) => setNewRestaurant({ ...newRestaurant, bloco: e.target.value })}
             />
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newRestaurant.cliente}
+                onChange={(e) => setNewRestaurant({ ...newRestaurant, cliente: e.target.checked })}
+                className="rounded"
+              />
+              <span className="text-xs">Cliente</span>
+            </label>
             <button
               onClick={handleCreate}
               disabled={creating}
@@ -255,36 +317,30 @@ export function RestaurantsTab() {
           </div>
         </div>
 
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-slate-200">Lista</h3>
-          <div className="max-h-80 overflow-auto border border-slate-800 rounded-md divide-y divide-slate-800 text-sm">
-            {restaurants.map((r) => (
-              <div key={r.id} className="px-2 py-2 flex items-center justify-between gap-2">
-                <div>
-                  <div className="font-medium">@{r.instagram_username}  {`• bloco ${r.bloco}`}</div>
-                  <div className="text-xs text-slate-400">
-                    {r.name || "(sem nome)"}
-                  </div>
-                </div>
-                <div className="flex gap-1 text-xs">
-                  <button
-                    className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700"
-                    onClick={() => setEditingRestaurant(r)}
-                  >
-                    Editar
-                  </button>
-                  <button
-                    className="px-2 py-0.5 rounded bg-red-700 hover:bg-red-600"
-                    onClick={() => handleDelete(r.id)}
-                  >
-                    Excluir
-                  </button>
-                </div>
-              </div>
-            ))}
-            {restaurants.length === 0 && (
-              <div className="px-3 py-4 text-xs text-slate-500">Nenhum restaurante cadastrado.</div>
-            )}
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-medium text-slate-200">Buscar</h3>
+            </div>
+            <input
+              type="text"
+              className="w-full rounded-md bg-slate-900 border border-slate-700 px-2 py-1 text-sm"
+              placeholder="Buscar por nome ou username..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-4 grid md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium text-slate-200">Clientes ({clientes.length})</h3>
+              {renderRestaurantList(clientes, "Nenhum cliente cadastrado.")}
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-sm font-medium text-slate-200">Não Clientes ({naoClientes.length})</h3>
+              {renderRestaurantList(naoClientes, "Nenhum não cliente cadastrado.")}
+            </div>
           </div>
         </div>
       </div>
@@ -324,6 +380,15 @@ export function RestaurantsTab() {
               }
             />
           </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={editingRestaurant.cliente}
+              onChange={(e) => setEditingRestaurant({ ...editingRestaurant, cliente: e.target.checked })}
+              className="rounded"
+            />
+            <span className="text-xs">Cliente</span>
+          </label>
           <button
             onClick={handleUpdate}
             disabled={updating}

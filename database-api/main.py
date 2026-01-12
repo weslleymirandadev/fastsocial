@@ -195,6 +195,7 @@ def create_restaurant(restaurant_in: RestaurantCreate, db: Session = Depends(get
         instagram_username=restaurant_in.instagram_username,
         name=restaurant_in.name,
         bloco=restaurant_in.bloco,
+        cliente=restaurant_in.cliente,
     )
     db.add(db_restaurant)
     db.commit()
@@ -222,6 +223,7 @@ def update_restaurant(restaurant_id: int, restaurant_in: RestaurantUpdate, db: S
         restaurant.name = restaurant_in.name
     if restaurant_in.bloco is not None:
         restaurant.bloco = int(restaurant_in.bloco)
+    restaurant.cliente = restaurant_in.cliente
 
     db.commit()
     db.refresh(restaurant)
@@ -362,6 +364,7 @@ def create_global_phrase(phrase_in: GlobalPhraseCreate, db: Session = Depends(ge
     db_phrase = Phrase(
         text=phrase_in.text,
         order=phrase_in.order,
+        cliente=phrase_in.cliente,
     )
     db.add(db_phrase)
     db.commit()
@@ -379,6 +382,7 @@ def update_global_phrase(phrase_id: int, phrase_in: GlobalPhraseUpdate, db: Sess
         phrase.text = phrase_in.text
     if phrase_in.order is not None:
         phrase.order = phrase_in.order
+    phrase.cliente = phrase_in.cliente
 
     db.commit()
     db.refresh(phrase)

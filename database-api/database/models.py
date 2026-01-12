@@ -34,6 +34,7 @@ class Restaurant(Base):
     ultima_persona = Column(String(200), nullable=True)
     ultima_frase_num = Column(Integer, nullable=True)
     ultima_frase_text = Column(Text, nullable=True)
+    cliente = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relacionamentos (opcional, mas útil)
@@ -59,6 +60,7 @@ class Phrase(Base):
     id = Column(Integer, primary_key=True, index=True)
     text = Column(Text, nullable=False)
     order = Column(Integer, nullable=False)  # ordem dentro da persona (1, 2, 3...)
+    cliente = Column(Boolean, nullable=False, default=False)
 
     # Relacionamentos
     # Phrase is now an independent entity (not tied to Persona)

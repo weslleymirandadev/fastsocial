@@ -16,6 +16,7 @@ export async function createRestaurant(payload: {
   instagram_username: string;
   name: string;
   bloco?: number;
+  cliente: boolean;
 }): Promise<void> {
   await apiRequest("/proxy/restaurants/", {
     method: "POST",
@@ -28,6 +29,7 @@ export async function createRestaurantsBulk(payloads: {
   instagram_username: string;
   name: string;
   bloco?: number;
+  cliente: boolean;
 }[]): Promise<void> {
   if (payloads.length === 0) return;
   await apiRequest("/restaurants/bulk", {
@@ -41,6 +43,7 @@ export async function updateRestaurant(id: number, payload: {
   instagram_username: string;
   name?: string | null;
   bloco?: number;
+  cliente: boolean;
 }): Promise<void> {
   await apiRequest(`/proxy/restaurants/${id}`, {
     method: "PUT",

@@ -35,6 +35,10 @@ class RestaurantBase(BaseModel):
         None, 
         description="Última frase usada"
     )
+    cliente: bool = Field(
+        False,
+        description="Indica se é cliente"
+    )
 
 
 class RestaurantCreate(RestaurantBase):
@@ -64,6 +68,7 @@ class RestaurantUpdate(BaseModel):
     instagram_username: Optional[str] = Field(None, max_length=100)
     name: Optional[str] = Field(None, max_length=200)
     bloco: Optional[int] = Field(None, ge=0, description="Bloco de restaurante")
+    cliente: bool = Field(False, description="Indica se é cliente")
 
     @validator("instagram_username", pre=True, always=True)
     def clean_username_update(cls, v):

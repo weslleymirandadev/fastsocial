@@ -11,6 +11,10 @@ class GlobalPhraseBase(BaseModel):
     )
     # Phrase is independent from Persona now
     order: int = Field(..., ge=0, description="Ordem da frase (opcionalmente usada pela UI)")
+    cliente: bool = Field(
+        False,
+        description="Indica se é cliente"
+    )
 
 
 class GlobalPhraseCreate(GlobalPhraseBase):
@@ -25,6 +29,7 @@ class GlobalPhraseCreate(GlobalPhraseBase):
 class GlobalPhraseUpdate(BaseModel):
     text: Optional[str] = Field(None, min_length=5, max_length=2000)
     order: Optional[int] = Field(None, ge=0)
+    cliente: bool = Field(False, description="Indica se é cliente")
     # persona_id removed: phrases are independent
 
     @validator("text", pre=True, always=True)
