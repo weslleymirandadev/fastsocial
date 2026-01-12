@@ -30,13 +30,14 @@ export async function createRestaurantsBulk(payloads: {
   name: string;
   bloco?: number;
   cliente: boolean;
-}[]): Promise<void> {
+}[]): Promise<{ created: number; skipped: number; created_items?: any[]; errors?: any[] } | void> {
   if (payloads.length === 0) return;
-  await apiRequest("/restaurants/bulk", {
+  const result = await apiRequest<{ created: number; skipped: number; created_items?: any[]; errors?: any[] }>("/restaurants/bulk", {
     method: "POST",
     body: JSON.stringify(payloads),
   });
   restaurantsCache = null;
+  return result;
 }
 
 export async function updateRestaurant(id: number, payload: {

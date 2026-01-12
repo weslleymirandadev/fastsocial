@@ -12,6 +12,12 @@ export function RestaurantsTab() {
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [importProgress, setImportProgress] = useState<{
+    total: number;
+    processed: number;
+    created: number;
+    skipped: number;
+  } | null>(null);
 
   function resetMessages() {
     setError(null);
@@ -86,7 +92,7 @@ export function RestaurantsTab() {
         (current || []).map((r) => r.instagram_username.trim().toLowerCase().replace(/^@/, ""))
       );
 
-      let created = 0;
+      let totalToCreate = 0;
       let skipped = 0;
       const toCreate: {
         instagram_username: string;
@@ -119,13 +125,60 @@ export function RestaurantsTab() {
           cliente: false,
         });
         existing.add(username);
-        created++;
+        totalToCreate++;
       }
 
-      await createRestaurantsBulk(toCreate);
+      if (toCreate.length === 0) {
+        setSuccess(`Nenhum restaurante novo para criar. Ignorados (duplicados/inválidos): ${skipped}`);
+        setLoading(false);
+        event.target.value = "";
+        return;
+      }
 
+      // Processa em chunks para melhor feedback e não travar a UI
+      const CHUNK_SIZE = 200; // Processa 200 por vez no frontend, o backend processa em batches de 100
+      let totalCreated = 0;
+      let totalSkipped = skipped;
+      
+      setImportProgress({
+        total: toCreate.length,
+        processed: 0,
+        created: 0,
+        skipped: skipped,
+      });
+
+      for (let i = 0; i < toCreate.length; i += CHUNK_SIZE) {
+        const chunk = toCreate.slice(i, i + CHUNK_SIZE);
+        
+        try {
+          const result = await createRestaurantsBulk(chunk);
+          
+          if (result) {
+            totalCreated += result.created || 0;
+            totalSkipped += result.skipped || 0;
+          }
+          
+          // Atualiza progresso
+          setImportProgress({
+            total: toCreate.length,
+            processed: Math.min(i + CHUNK_SIZE, toCreate.length),
+            created: totalCreated,
+            skipped: totalSkipped,
+          });
+          
+          // Pequeno delay para não sobrecarregar o servidor
+          if (i + CHUNK_SIZE < toCreate.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        } catch (error) {
+          console.error(`Erro ao processar chunk ${i}-${i + CHUNK_SIZE}:`, error);
+          // Continua processando os próximos chunks mesmo se um falhar
+        }
+      }
+
+      setImportProgress(null);
       setSuccess(
-        `Importação concluída. Criados: ${created}, ignorados (duplicados/inválidos): ${skipped}`
+        `Importação concluída. Criados: ${totalCreated}, ignorados (duplicados/inválidos): ${totalSkipped}`
       );
       await loadRestaurants(true);
     } catch (e) {
@@ -273,6 +326,23 @@ export function RestaurantsTab() {
       {loading && <div className="text-xs text-slate-400">Carregando...</div>}
       {error && <div className="text-xs text-red-400">{error}</div>}
       {success && <div className="text-xs text-emerald-400">{success}</div>}
+      {importProgress && (
+        <div className="text-xs text-slate-300 space-y-1 p-3 bg-slate-900 border border-slate-700 rounded-md">
+          <div className="flex items-center justify-between">
+            <span>Importando restaurantes...</span>
+            <span>{importProgress.processed} / {importProgress.total}</span>
+          </div>
+          <div className="w-full bg-slate-800 rounded-full h-2">
+            <div
+              className="bg-emerald-600 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${(importProgress.processed / importProgress.total) * 100}%` }}
+            />
+          </div>
+          <div className="text-xs text-slate-400">
+            Criados: {importProgress.created} • Ignorados: {importProgress.skipped}
+          </div>
+        </div>
+      )}
 
       <div className="grid md:grid-cols-1 gap-6">
         <div className="space-y-2">

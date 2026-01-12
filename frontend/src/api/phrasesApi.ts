@@ -28,13 +28,14 @@ export async function createPhrasesBulk(payloads: {
   text: string;
   order: number;
   cliente: boolean;
-}[]): Promise<void> {
+}[]): Promise<{ created: number; skipped: number; created_items?: any[]; errors?: any[] } | void> {
   if (payloads.length === 0) return;
-  await apiRequest("/phrases/bulk", {
+  const result = await apiRequest<{ created: number; skipped: number; created_items?: any[]; errors?: any[] }>("/phrases/bulk", {
     method: "POST",
     body: JSON.stringify(payloads),
   });
   phrasesCache = null;
+  return result;
 }
 
 export async function updatePhrase(id: number, payload: {

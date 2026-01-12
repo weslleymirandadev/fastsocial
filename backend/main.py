@@ -329,9 +329,9 @@ def _post_to_database(path: str, json_body: Dict[str, Any], timeout: float = 15.
 
 @app.post("/restaurants/bulk")
 async def bulk_create_restaurants(request: Request):
-    """Recebe uma lista de restaurantes e cria cada um na database-api em paralelo.
+    """Recebe uma lista de restaurantes e cria em batches usando o endpoint bulk da database-api.
 
-    A lógica de validação/deduplicação continua na database-api (RestaurantCreate + POST /restaurants/).
+    Processa em lotes de 100 restaurantes por vez para evitar sobrecarga do banco de dados.
     """
     try:
         payload = await request.json()
@@ -341,33 +341,58 @@ async def bulk_create_restaurants(request: Request):
     if not isinstance(payload, list):
         return JSONResponse({"error": "payload must be a JSON array"}, status_code=400)
 
-    results = []
+    if not payload:
+        return {"created": 0, "skipped": 0, "created_items": [], "errors": []}
+
+    BATCH_SIZE = 100  # Processa 100 restaurantes por vez
+    all_created = []
+    all_skipped = 0
     errors = []
 
-    with ThreadPoolExecutor(max_workers=100) as executor:
-        future_map = {
-            executor.submit(_post_to_database, "restaurants/", item): i
-            for i, item in enumerate(payload)
-        }
-        for future in as_completed(future_map):
-            idx = future_map[future]
-            try:
-                status, body = future.result()
-            except Exception as e:  # segurança extra
-                errors.append({"index": idx, "error": str(e)})
-                continue
-
-            if 200 <= status < 300:
-                results.append(body)
+    # Processa em batches
+    for i in range(0, len(payload), BATCH_SIZE):
+        batch = payload[i:i + BATCH_SIZE]
+        try:
+            url = f"{settings.DATABASE_API_URL}/restaurants/bulk"
+            resp = requests.post(url, json=batch, timeout=60)  # Timeout maior para batches
+            
+            if resp.status_code == 201:
+                result = resp.json()
+                all_created.extend(result.get("created_items", []))
+                all_skipped += result.get("skipped", 0)
             else:
-                errors.append({"index": idx, "status": status, "body": body})
+                # Se o batch falhar, tenta processar item por item para identificar erros específicos
+                try:
+                    error_detail = resp.json()
+                except:
+                    error_detail = resp.text
+                errors.append({
+                    "batch_start": i,
+                    "batch_end": min(i + BATCH_SIZE, len(payload)),
+                    "status": resp.status_code,
+                    "detail": error_detail
+                })
+        except Exception as e:
+            errors.append({
+                "batch_start": i,
+                "batch_end": min(i + BATCH_SIZE, len(payload)),
+                "error": str(e)
+            })
 
-    return {"created": results, "errors": errors}
+    return {
+        "created": len(all_created),
+        "skipped": all_skipped,
+        "created_items": all_created,
+        "errors": errors
+    }
 
 
 @app.post("/personas/bulk")
 async def bulk_create_personas(request: Request):
-    """Recebe uma lista de personas e cria cada uma na database-api em paralelo."""
+    """Recebe uma lista de personas e cria em batches usando o endpoint bulk da database-api.
+
+    Processa em lotes de 100 personas por vez para evitar sobrecarga do banco de dados.
+    """
     try:
         payload = await request.json()
     except Exception as e:
@@ -376,33 +401,58 @@ async def bulk_create_personas(request: Request):
     if not isinstance(payload, list):
         return JSONResponse({"error": "payload must be a JSON array"}, status_code=400)
 
-    results = []
+    if not payload:
+        return {"created": 0, "skipped": 0, "created_items": [], "errors": []}
+
+    BATCH_SIZE = 100  # Processa 100 personas por vez
+    all_created = []
+    all_skipped = 0
     errors = []
 
-    with ThreadPoolExecutor(max_workers=100) as executor:
-        future_map = {
-            executor.submit(_post_to_database, "personas/", item): i
-            for i, item in enumerate(payload)
-        }
-        for future in as_completed(future_map):
-            idx = future_map[future]
-            try:
-                status, body = future.result()
-            except Exception as e:
-                errors.append({"index": idx, "error": str(e)})
-                continue
-
-            if 200 <= status < 300:
-                results.append(body)
+    # Processa em batches
+    for i in range(0, len(payload), BATCH_SIZE):
+        batch = payload[i:i + BATCH_SIZE]
+        try:
+            url = f"{settings.DATABASE_API_URL}/personas/bulk"
+            resp = requests.post(url, json=batch, timeout=60)  # Timeout maior para batches
+            
+            if resp.status_code == 201:
+                result = resp.json()
+                all_created.extend(result.get("created_items", []))
+                all_skipped += result.get("skipped", 0)
             else:
-                errors.append({"index": idx, "status": status, "body": body})
+                # Se o batch falhar, registra o erro
+                try:
+                    error_detail = resp.json()
+                except:
+                    error_detail = resp.text
+                errors.append({
+                    "batch_start": i,
+                    "batch_end": min(i + BATCH_SIZE, len(payload)),
+                    "status": resp.status_code,
+                    "detail": error_detail
+                })
+        except Exception as e:
+            errors.append({
+                "batch_start": i,
+                "batch_end": min(i + BATCH_SIZE, len(payload)),
+                "error": str(e)
+            })
 
-    return {"created": results, "errors": errors}
+    return {
+        "created": len(all_created),
+        "skipped": all_skipped,
+        "created_items": all_created,
+        "errors": errors
+    }
 
 
 @app.post("/phrases/bulk")
 async def bulk_create_phrases(request: Request):
-    """Recebe uma lista de frases e cria cada uma na database-api em paralelo."""
+    """Recebe uma lista de frases e cria em batches usando o endpoint bulk da database-api.
+
+    Processa em lotes de 100 frases por vez para evitar sobrecarga do banco de dados.
+    """
     try:
         payload = await request.json()
     except Exception as e:
@@ -411,25 +461,47 @@ async def bulk_create_phrases(request: Request):
     if not isinstance(payload, list):
         return JSONResponse({"error": "payload must be a JSON array"}, status_code=400)
 
-    results = []
+    if not payload:
+        return {"created": 0, "skipped": 0, "created_items": [], "errors": []}
+
+    BATCH_SIZE = 100  # Processa 100 frases por vez
+    all_created = []
+    all_skipped = 0
     errors = []
 
-    with ThreadPoolExecutor(max_workers=100) as executor:
-        future_map = {
-            executor.submit(_post_to_database, "phrases/", item): i
-            for i, item in enumerate(payload)
-        }
-        for future in as_completed(future_map):
-            idx = future_map[future]
-            try:
-                status, body = future.result()
-            except Exception as e:
-                errors.append({"index": idx, "error": str(e)})
-                continue
-
-            if 200 <= status < 300:
-                results.append(body)
+    # Processa em batches
+    for i in range(0, len(payload), BATCH_SIZE):
+        batch = payload[i:i + BATCH_SIZE]
+        try:
+            url = f"{settings.DATABASE_API_URL}/phrases/bulk"
+            resp = requests.post(url, json=batch, timeout=60)  # Timeout maior para batches
+            
+            if resp.status_code == 201:
+                result = resp.json()
+                all_created.extend(result.get("created_items", []))
+                all_skipped += result.get("skipped", 0)
             else:
-                errors.append({"index": idx, "status": status, "body": body})
+                # Se o batch falhar, registra o erro
+                try:
+                    error_detail = resp.json()
+                except:
+                    error_detail = resp.text
+                errors.append({
+                    "batch_start": i,
+                    "batch_end": min(i + BATCH_SIZE, len(payload)),
+                    "status": resp.status_code,
+                    "detail": error_detail
+                })
+        except Exception as e:
+            errors.append({
+                "batch_start": i,
+                "batch_end": min(i + BATCH_SIZE, len(payload)),
+                "error": str(e)
+            })
 
-    return {"created": results, "errors": errors}
+    return {
+        "created": len(all_created),
+        "skipped": all_skipped,
+        "created_items": all_created,
+        "errors": errors
+    }

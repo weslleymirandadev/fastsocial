@@ -28,13 +28,14 @@ export async function createPersonasBulk(payloads: {
   name: string;
   instagram_username: string;
   instagram_password: string;
-}[]): Promise<void> {
+}[]): Promise<{ created: number; skipped: number; created_items?: any[]; errors?: any[] } | void> {
   if (payloads.length === 0) return;
-  await apiRequest("/personas/bulk", {
+  const result = await apiRequest<{ created: number; skipped: number; created_items?: any[]; errors?: any[] }>("/personas/bulk", {
     method: "POST",
     body: JSON.stringify(payloads),
   });
   personasCache = null;
+  return result;
 }
 
 export async function updatePersona(id: number, payload: {

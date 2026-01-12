@@ -21,6 +21,7 @@ from database.models import (
     Config,
     AutomationRun,
     FollowStatus,
+    InboxMessage,
 )
 
 from database.crud import get_db
@@ -203,6 +204,69 @@ def create_restaurant(restaurant_in: RestaurantCreate, db: Session = Depends(get
     return db_restaurant
 
 
+@app.post("/restaurants/bulk", status_code=201)
+def bulk_create_restaurants(restaurants_in: List[RestaurantCreate], db: Session = Depends(get_db)):
+    """Cria múltiplos restaurantes em uma única transação usando bulk insert.
+    
+    Usa inserção em lote para melhor performance e evita duplicatas baseado em instagram_username.
+    """
+    if not restaurants_in:
+        return {"created": 0, "skipped": 0, "created_items": []}
+    
+    # Busca todos os usernames existentes de uma vez
+    usernames_to_check = [r.instagram_username for r in restaurants_in]
+    existing_restaurants = db.query(Restaurant).filter(
+        Restaurant.instagram_username.in_(usernames_to_check)
+    ).all()
+    existing_usernames = {r.instagram_username for r in existing_restaurants}
+    
+    # Filtra apenas os restaurantes que não existem
+    restaurants_to_create = []
+    skipped_count = 0
+    
+    for r in restaurants_in:
+        if r.instagram_username in existing_usernames:
+            skipped_count += 1
+            continue
+        restaurants_to_create.append(
+            Restaurant(
+                instagram_username=r.instagram_username,
+                name=r.name,
+                bloco=r.bloco,
+                cliente=r.cliente,
+            )
+        )
+        existing_usernames.add(r.instagram_username)  # Evita duplicatas dentro do próprio batch
+    
+    if not restaurants_to_create:
+        return {"created": 0, "skipped": skipped_count, "created_items": []}
+    
+    # Insere todos em uma única operação de bulk insert
+    db.bulk_save_objects(restaurants_to_create)
+    db.commit()
+    
+    # Busca os IDs dos restaurantes criados
+    created_usernames = [r.instagram_username for r in restaurants_to_create]
+    created_restaurants = db.query(Restaurant).filter(
+        Restaurant.instagram_username.in_(created_usernames)
+    ).all()
+    
+    return {
+        "created": len(created_restaurants),
+        "skipped": skipped_count,
+        "created_items": [
+            {
+                "id": r.id,
+                "instagram_username": r.instagram_username,
+                "name": r.name,
+                "bloco": r.bloco,
+                "cliente": r.cliente,
+            }
+            for r in created_restaurants
+        ]
+    }
+
+
 @app.put("/restaurants/{restaurant_id}", response_model=RestaurantOut)
 def update_restaurant(restaurant_id: int, restaurant_in: RestaurantUpdate, db: Session = Depends(get_db)):
     restaurant = db.query(Restaurant).filter(Restaurant.id == restaurant_id).first()
@@ -274,6 +338,72 @@ def create_persona(persona: PersonaCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_persona)
     return db_persona
+
+
+@app.post("/personas/bulk", status_code=201)
+def bulk_create_personas(personas_in: List[PersonaCreate], db: Session = Depends(get_db)):
+    """Cria múltiplas personas em uma única transação usando bulk insert.
+    
+    Usa inserção em lote para melhor performance e evita duplicatas baseado em name ou instagram_username.
+    """
+    if not personas_in:
+        return {"created": 0, "skipped": 0, "created_items": []}
+    
+    # Busca todos os nomes e usernames existentes de uma vez
+    names_to_check = [p.name for p in personas_in]
+    usernames_to_check = [p.instagram_username for p in personas_in]
+    
+    existing_personas = db.query(Persona).filter(
+        (Persona.name.in_(names_to_check)) |
+        (Persona.instagram_username.in_(usernames_to_check))
+    ).all()
+    
+    existing_names = {p.name for p in existing_personas}
+    existing_usernames = {p.instagram_username for p in existing_personas}
+    
+    # Filtra apenas as personas que não existem
+    personas_to_create = []
+    skipped_count = 0
+    
+    for p in personas_in:
+        if p.name in existing_names or p.instagram_username in existing_usernames:
+            skipped_count += 1
+            continue
+        personas_to_create.append(
+            Persona(
+                name=p.name,
+                instagram_username=p.instagram_username,
+                instagram_password=p.instagram_password,
+            )
+        )
+        existing_names.add(p.name)
+        existing_usernames.add(p.instagram_username)  # Evita duplicatas dentro do próprio batch
+    
+    if not personas_to_create:
+        return {"created": 0, "skipped": skipped_count, "created_items": []}
+    
+    # Insere todos em uma única operação de bulk insert
+    db.bulk_save_objects(personas_to_create)
+    db.commit()
+    
+    # Busca os IDs das personas criadas
+    created_usernames = [p.instagram_username for p in personas_to_create]
+    created_personas = db.query(Persona).filter(
+        Persona.instagram_username.in_(created_usernames)
+    ).all()
+    
+    return {
+        "created": len(created_personas),
+        "skipped": skipped_count,
+        "created_items": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "instagram_username": p.instagram_username,
+            }
+            for p in created_personas
+        ]
+    }
 
 
 @app.get("/personas/{persona_id}", response_model=PersonaOut)
@@ -370,6 +500,81 @@ def create_global_phrase(phrase_in: GlobalPhraseCreate, db: Session = Depends(ge
     db.commit()
     db.refresh(db_phrase)
     return db_phrase
+
+
+@app.post("/phrases/bulk", status_code=201)
+def bulk_create_phrases(phrases_in: List[GlobalPhraseCreate], db: Session = Depends(get_db)):
+    """Cria múltiplas frases em uma única transação usando bulk insert.
+    
+    Usa inserção em lote para melhor performance.
+    Frases são consideradas duplicadas se tiverem o mesmo texto e ordem.
+    """
+    if not phrases_in:
+        return {"created": 0, "skipped": 0, "created_items": []}
+    
+    # Busca frases existentes com mesmo texto e ordem
+    # Busca todas as frases para verificar duplicatas (texto + ordem)
+    # Em volumes grandes, isso pode ser otimizado futuramente, mas para a maioria dos casos funciona bem
+    existing_keys = set()
+    texts_to_check = [p.text.strip().lower() for p in phrases_in]
+    
+    # Busca apenas frases que podem ser duplicatas (mesmo texto ou mesma ordem)
+    existing_phrases = db.query(Phrase).filter(
+        (Phrase.text.in_([t for t in set(texts_to_check)]))
+    ).all()
+    
+    for existing in existing_phrases:
+        existing_keys.add((existing.text.strip().lower(), existing.order))
+    
+    # Filtra apenas as frases que não existem
+    phrases_to_create = []
+    skipped_count = 0
+    
+    for p in phrases_in:
+        key = (p.text.strip().lower(), p.order)
+        if key in existing_keys:
+            skipped_count += 1
+            continue
+        phrases_to_create.append(
+            Phrase(
+                text=p.text,
+                order=p.order,
+                cliente=p.cliente,
+            )
+        )
+        existing_keys.add(key)  # Evita duplicatas dentro do próprio batch
+    
+    if not phrases_to_create:
+        return {"created": 0, "skipped": skipped_count, "created_items": []}
+    
+    # Insere todos em uma única operação de bulk insert
+    db.bulk_save_objects(phrases_to_create)
+    db.commit()
+    
+    # Busca os IDs das frases criadas
+    created_phrases = db.query(Phrase).filter(
+        Phrase.text.in_([p.text for p in phrases_to_create])
+    ).all()
+    
+    # Ordena para corresponder à ordem de inserção (aproximadamente)
+    created_by_text_order = {(p.text.strip().lower(), p.order): p for p in created_phrases}
+    result_items = []
+    for p in phrases_to_create:
+        key = (p.text.strip().lower(), p.order)
+        if key in created_by_text_order:
+            phrase = created_by_text_order[key]
+            result_items.append({
+                "id": phrase.id,
+                "text": phrase.text,
+                "order": phrase.order,
+                "cliente": phrase.cliente,
+            })
+    
+    return {
+        "created": len(result_items),
+        "skipped": skipped_count,
+        "created_items": result_items
+    }
 
 
 @app.put("/phrases/{phrase_id}", response_model=GlobalPhraseOut)
@@ -778,6 +983,120 @@ def messages_report(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=messages_report.xlsx"},
     )
+
+
+# ======================
+# INBOX MESSAGES (Mensagens Recebidas)
+# ======================
+@app.post("/inbox-messages/", status_code=201)
+def create_inbox_message(payload: dict, db: Session = Depends(get_db)):
+    """Cria ou atualiza uma mensagem recebida do inbox."""
+    persona_id = payload.get("persona_id")
+    thread_id = payload.get("thread_id")
+    item_id = payload.get("item_id")
+    sender_user_id = payload.get("sender_user_id")
+    sender_username = payload.get("sender_username")
+    message_text = payload.get("message_text", "")
+    received_at = payload.get("received_at")
+    email_sent = payload.get("email_sent", False)
+    
+    if not all([persona_id, thread_id, item_id, sender_user_id, sender_username]):
+        raise HTTPException(
+            status_code=400,
+            detail="persona_id, thread_id, item_id, sender_user_id e sender_username são obrigatórios"
+        )
+    
+    # Verifica se já existe
+    existing = db.query(InboxMessage).filter(InboxMessage.item_id == item_id).first()
+    if existing:
+        # Atualiza se necessário
+        if received_at:
+            from datetime import datetime
+            if isinstance(received_at, str):
+                received_at = datetime.fromisoformat(received_at.replace('Z', '+00:00'))
+            existing.received_at = received_at
+        existing.email_sent = email_sent
+        db.commit()
+        db.refresh(existing)
+        return {
+            "id": existing.id,
+            "persona_id": existing.persona_id,
+            "item_id": existing.item_id,
+            "created": False
+        }
+    
+    # Cria nova mensagem
+    inbox_msg = InboxMessage(
+        persona_id=persona_id,
+        thread_id=thread_id,
+        item_id=item_id,
+        sender_user_id=sender_user_id,
+        sender_username=sender_username,
+        message_text=message_text,
+        email_sent=email_sent,
+    )
+    
+    if received_at:
+        from datetime import datetime
+        if isinstance(received_at, str):
+            received_at = datetime.fromisoformat(received_at.replace('Z', '+00:00'))
+        inbox_msg.received_at = received_at
+    
+    db.add(inbox_msg)
+    db.commit()
+    db.refresh(inbox_msg)
+    
+    return {
+        "id": inbox_msg.id,
+        "persona_id": inbox_msg.persona_id,
+        "item_id": inbox_msg.item_id,
+        "created": True
+    }
+
+
+@app.get("/inbox-messages/")
+def list_inbox_messages(
+    persona_id: Optional[int] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """Lista mensagens recebidas do inbox."""
+    query = db.query(InboxMessage)
+    
+    if persona_id:
+        query = query.filter(InboxMessage.persona_id == persona_id)
+    
+    messages = query.order_by(InboxMessage.received_at.desc()).offset(skip).limit(limit).all()
+    
+    return [
+        {
+            "id": msg.id,
+            "persona_id": msg.persona_id,
+            "thread_id": msg.thread_id,
+            "item_id": msg.item_id,
+            "sender_user_id": msg.sender_user_id,
+            "sender_username": msg.sender_username,
+            "message_text": msg.message_text,
+            "received_at": msg.received_at.isoformat() if msg.received_at else None,
+            "email_sent": msg.email_sent,
+        }
+        for msg in messages
+    ]
+
+
+@app.get("/inbox-messages/check/{item_id}")
+def check_inbox_message_exists(item_id: str, db: Session = Depends(get_db)):
+    """Verifica se uma mensagem já existe pelo item_id."""
+    message = db.query(InboxMessage).filter(InboxMessage.item_id == item_id).first()
+    return {"exists": message is not None, "item_id": item_id}
+
+
+@app.get("/inbox-messages/persona/{persona_id}/last-checked")
+def get_last_checked_item_ids(persona_id: int, db: Session = Depends(get_db)):
+    """Retorna todos os item_ids já processados para uma persona (para evitar duplicatas)."""
+    messages = db.query(InboxMessage.item_id).filter(InboxMessage.persona_id == persona_id).all()
+    return {"persona_id": persona_id, "item_ids": [m[0] for m in messages]}
 
 
 # ======================

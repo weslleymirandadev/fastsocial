@@ -16,6 +16,12 @@ export function PersonasTab() {
   const [creating, setCreating] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [importProgress, setImportProgress] = useState<{
+    total: number;
+    processed: number;
+    created: number;
+    skipped: number;
+  } | null>(null);
 
   function resetMessages() {
     setError(null);
@@ -69,7 +75,7 @@ export function PersonasTab() {
         (current || []).map((p) => p.instagram_username.trim().toLowerCase().replace(/^@/, ""))
       );
 
-      let created = 0;
+      let totalToCreate = 0;
       let skipped = 0;
       const toCreate: {
         name: string;
@@ -95,13 +101,60 @@ export function PersonasTab() {
 
         toCreate.push({ name, instagram_username: username, instagram_password: password });
         existing.add(username);
-        created++;
+        totalToCreate++;
       }
 
-      await createPersonasBulk(toCreate);
+      if (toCreate.length === 0) {
+        setSuccess(`Nenhuma persona nova para criar. Ignoradas (duplicadas/inválidas): ${skipped}`);
+        setLoading(false);
+        event.target.value = "";
+        return;
+      }
 
+      // Processa em chunks para melhor feedback e não travar a UI
+      const CHUNK_SIZE = 200; // Processa 200 por vez no frontend, o backend processa em batches de 100
+      let totalCreated = 0;
+      let totalSkipped = skipped;
+      
+      setImportProgress({
+        total: toCreate.length,
+        processed: 0,
+        created: 0,
+        skipped: skipped,
+      });
+
+      for (let i = 0; i < toCreate.length; i += CHUNK_SIZE) {
+        const chunk = toCreate.slice(i, i + CHUNK_SIZE);
+        
+        try {
+          const result = await createPersonasBulk(chunk);
+          
+          if (result) {
+            totalCreated += result.created || 0;
+            totalSkipped += result.skipped || 0;
+          }
+          
+          // Atualiza progresso
+          setImportProgress({
+            total: toCreate.length,
+            processed: Math.min(i + CHUNK_SIZE, toCreate.length),
+            created: totalCreated,
+            skipped: totalSkipped,
+          });
+          
+          // Pequeno delay para não sobrecarregar o servidor
+          if (i + CHUNK_SIZE < toCreate.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        } catch (error) {
+          console.error(`Erro ao processar chunk ${i}-${i + CHUNK_SIZE}:`, error);
+          // Continua processando os próximos chunks mesmo se um falhar
+        }
+      }
+
+      setImportProgress(null);
       setSuccess(
-        `Importação concluída. Criadas: ${created}, ignoradas (duplicadas/inválidas): ${skipped}`
+        `Importação concluída. Criadas: ${totalCreated}, ignoradas (duplicadas/inválidas): ${totalSkipped}`
       );
       await loadPersonas(true);
     } catch (e) {
@@ -211,6 +264,23 @@ export function PersonasTab() {
       {loading && <div className="text-xs text-slate-400">Carregando...</div>}
       {error && <div className="text-xs text-red-400">{error}</div>}
       {success && <div className="text-xs text-emerald-400">{success}</div>}
+      {importProgress && (
+        <div className="text-xs text-slate-300 space-y-1 p-3 bg-slate-900 border border-slate-700 rounded-md">
+          <div className="flex items-center justify-between">
+            <span>Importando personas...</span>
+            <span>{importProgress.processed} / {importProgress.total}</span>
+          </div>
+          <div className="w-full bg-slate-800 rounded-full h-2">
+            <div
+              className="bg-emerald-600 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${(importProgress.processed / importProgress.total) * 100}%` }}
+            />
+          </div>
+          <div className="text-xs text-slate-400">
+            Criadas: {importProgress.created} • Ignoradas: {importProgress.skipped}
+          </div>
+        </div>
+      )}
 
       <div className="grid md:grid-cols-2 gap-6">
         <div className="space-y-2">
