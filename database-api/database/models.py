@@ -100,3 +100,19 @@ class FollowStatus(Base):
     restaurant_follows_persona = Column(Boolean, nullable=False, default=False)
     persona_follows_restaurant = Column(Boolean, nullable=False, default=False)
     last_checked = Column(DateTime(timezone=True), nullable=True)
+
+
+class InboxMessage(Base):
+    __tablename__ = "inbox_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    persona_id = Column(Integer, ForeignKey("personas.id"), nullable=False, index=True)
+    thread_id = Column(String(100), nullable=False, index=True)
+    item_id = Column(String(100), nullable=False, unique=True, index=True)
+    sender_user_id = Column(String(100), nullable=False)
+    sender_username = Column(String(100), nullable=False)
+    message_text = Column(Text, nullable=True)
+    received_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    email_sent = Column(Boolean, nullable=False, default=False)
+    
+    persona = relationship("Persona")
