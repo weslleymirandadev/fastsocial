@@ -31,11 +31,16 @@ class CarouselAutomator:
         resp.raise_for_status()
         return resp.json()
 
-    def _get_phrases(self, persona_id: int) -> List[Dict[Any, Any]]:
+    def _get_phrases(self, persona_id: int, is_cliente: bool) -> List[Dict[Any, Any]]:
         # Phrases are independent in the database API; fetch global list
         resp = requests.get(f"{self.db_url}/phrases/")
         resp.raise_for_status()
-        return sorted(resp.json(), key=lambda x: x.get("order", 0))
+        all_phrases = sorted(resp.json(), key=lambda x: x.get("order", 0))
+        
+        # Filtra frases baseado no campo cliente do restaurante
+        all_phrases = [p for p in all_phrases if p.get("cliente", False) == is_cliente]
+        
+        return all_phrases
 
     def _get_last_message(self, restaurant_id: int) -> Optional[Dict[str, Any]]:
         resp = requests.get(f"{self.db_url}/last-message/{restaurant_id}")
@@ -337,16 +342,23 @@ class CarouselAutomator:
                 f"→ {len(block_restaurants)} restaurantes"
             )
 
-            # Frases são globais; carregamos uma vez por bloco
-            phrases = self._get_phrases(persona_id=0)  # persona_id é ignorado na implementação atual
-            if not phrases:
-                logger.error("Nenhuma frase configurada! Pulando bloco.")
-                continue
-
-            # Índice de frase dentro do bloco: restaurante 0 -> frase 0, restaurante 1 -> frase 1, ...
-            phrase_index = 0
+            # Índices de frase separados por tipo (cliente/não-cliente) dentro do bloco
+            phrase_index_cliente = 0
+            phrase_index_nao_cliente = 0
 
             for restaurant in block_restaurants:
+                # Filtra frases baseado no campo cliente do restaurante
+                is_cliente = restaurant.get("cliente", False)
+                phrases = self._get_phrases(persona_id=0, is_cliente=is_cliente)  # persona_id é ignorado na implementação atual
+                if not phrases:
+                    logger.warning(
+                        f"@{restaurant.get('instagram_username')} | "
+                        f"Nenhuma frase configurada para {'clientes' if is_cliente else 'não clientes'}! Pulando restaurante."
+                    )
+                    continue
+                
+                # Usa índice apropriado baseado no tipo
+                phrase_index = phrase_index_cliente if is_cliente else phrase_index_nao_cliente
                 rest_id = restaurant["id"]
                 rest_username = restaurant["instagram_username"]
 
@@ -426,7 +438,12 @@ class CarouselAutomator:
                 # Seleciona frase em carrossel por bloco:
                 # restaurante 0 -> frase 0, restaurante 1 -> frase 1, se acabar volta para frase 0
                 next_phrase = phrases[phrase_index % len(phrases)]
-                phrase_index += 1
+                
+                # Incrementa o índice apropriado baseado no tipo
+                if is_cliente:
+                    phrase_index_cliente += 1
+                else:
+                    phrase_index_nao_cliente += 1
 
                 # 1) Primeiro tenta enviar diretamente todas as partes da mensagem
                 success, failed_index = self._send_multipart_dm(
