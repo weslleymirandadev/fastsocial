@@ -5,6 +5,7 @@ export interface Restaurant {
   instagram_username: string;
   name?: string | null;
   bloco?: number | null;
+  cliente: boolean;
 }
 
 export interface Persona {
@@ -18,6 +19,7 @@ export interface Phrase {
   id: number;
   text: string;
   order?: number | null;
+  cliente: boolean;
 }
 
 export interface BackendStatus {
