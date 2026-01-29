@@ -311,6 +311,25 @@ def delete_restaurant(restaurant_id: int, db: Session = Depends(get_db)):
     return {"status": "deleted"}
 
 
+@app.delete("/restaurants/", response_model=dict)
+def delete_all_restaurants(db: Session = Depends(get_db)):
+    """
+    Deleta TODOS os restaurantes.
+    Também remove registros relacionados (MessageLog e FollowStatus) para evitar erro de FK.
+    """
+    deleted_restaurants = db.query(Restaurant).count()
+
+    # Limpa relacionamentos
+    db.query(MessageLog).delete(synchronize_session=False)
+    db.query(FollowStatus).delete(synchronize_session=False)
+
+    # Deleta restaurantes
+    db.query(Restaurant).delete(synchronize_session=False)
+    db.commit()
+
+    return {"deleted": deleted_restaurants}
+
+
 # ======================
 # ROTAS - PERSONAS
 # ======================
@@ -465,6 +484,24 @@ def delete_persona(persona_id: int, db: Session = Depends(get_db)):
     return {"status": "deleted"}
 
 
+@app.delete("/personas/", response_model=dict)
+def delete_all_personas(db: Session = Depends(get_db)):
+    """
+    Deleta TODAS as personas.
+    Também remove registros relacionados (MessageLog, FollowStatus, InboxMessage) para evitar erro de FK.
+    """
+    deleted_personas = db.query(Persona).count()
+
+    db.query(MessageLog).delete(synchronize_session=False)
+    db.query(FollowStatus).delete(synchronize_session=False)
+    db.query(InboxMessage).delete(synchronize_session=False)
+
+    db.query(Persona).delete(synchronize_session=False)
+    db.commit()
+
+    return {"deleted": deleted_personas}
+
+
 # ======================
 # ROTAS - FRASES (GLOBAIS / INDEPENDENTES)
 # ======================
@@ -603,6 +640,21 @@ def delete_global_phrase(phrase_id: int, db: Session = Depends(get_db)):
     db.delete(phrase)
     db.commit()
     return {"status": "deleted"}
+
+
+@app.delete("/phrases/", response_model=dict)
+def delete_all_phrases(db: Session = Depends(get_db)):
+    """
+    Deleta TODAS as frases.
+    Remove MessageLog antes para evitar FK (MessageLog.phrase_id).
+    """
+    deleted_phrases = db.query(Phrase).count()
+
+    db.query(MessageLog).delete(synchronize_session=False)
+    db.query(Phrase).delete(synchronize_session=False)
+    db.commit()
+
+    return {"deleted": deleted_phrases}
 
 
 # ======================
