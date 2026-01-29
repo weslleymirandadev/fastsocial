@@ -57,3 +57,9 @@ export async function deleteRestaurant(id: number): Promise<void> {
   await apiRequest(`/proxy/restaurants/${id}`, { method: "DELETE" });
   restaurantsCache = null;
 }
+
+export async function deleteAllRestaurants(): Promise<{ deleted: number } | void> {
+  const result = await apiRequest<{ deleted: number }>("/proxy/restaurants/", { method: "DELETE" });
+  restaurantsCache = null;
+  return result;
+}

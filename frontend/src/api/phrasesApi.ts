@@ -54,3 +54,9 @@ export async function deletePhrase(id: number): Promise<void> {
   await apiRequest(`/proxy/phrases/${id}`, { method: "DELETE" });
   phrasesCache = null;
 }
+
+export async function deleteAllPhrases(): Promise<{ deleted: number } | void> {
+  const result = await apiRequest<{ deleted: number }>("/proxy/phrases/", { method: "DELETE" });
+  phrasesCache = null;
+  return result;
+}
