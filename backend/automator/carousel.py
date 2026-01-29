@@ -146,84 +146,6 @@ class CarouselAutomator:
         next_idx = (last_idx + 1) % len(phrases)
         return phrases[next_idx]
 
-    def _update_follow_status(
-        self,
-        restaurant_id: int,
-        persona_id: int,
-        restaurant_follows_persona: Optional[bool] = None,
-        persona_follows_restaurant: Optional[bool] = None,
-    ) -> None:
-        """Envia o status de follow atual para o database-api.
-
-        Best-effort: erros aqui não devem quebrar a automação.
-        """
-        payload: Dict[str, Any] = {
-            "restaurant_id": restaurant_id,
-            "persona_id": persona_id,
-        }
-        if restaurant_follows_persona is not None:
-            payload["restaurant_follows_persona"] = bool(restaurant_follows_persona)
-        if persona_follows_restaurant is not None:
-            payload["persona_follows_restaurant"] = bool(persona_follows_restaurant)
-
-        try:
-            requests.post(f"{self.db_url}/follow-status/", json=payload, timeout=5)
-        except Exception as e:
-            logger.debug(f"Falha ao atualizar follow-status no database-api: {e}")
-
-    def _ensure_mutual_follow(
-        self,
-        client: InstagramClient,
-        restaurant: Dict[str, Any],
-        persona: Dict[str, Any],
-    ) -> bool:
-        """Garante a lógica de follow antes do envio da mensagem.
-
-        - Checa se persona segue o restaurante e se o restaurante segue a persona.
-        - Se ainda não houver follow, envia follow da persona -> restaurante.
-        - Atualiza o banco com o status atual.
-        - Retorna True somente quando ambos se seguem.
-        """
-        rest_username = restaurant.get("instagram_username")
-        if not rest_username:
-            logger.warning("Restaurante sem instagram_username, não é possível checar follow.")
-            return False
-
-        try:
-            persona_follows, restaurant_follows = client.check_mutual_follow(rest_username)
-        except Exception as e:
-            logger.error(f"Erro ao checar follow entre persona={persona.get('instagram_username')} e restaurante={rest_username}: {e}")
-            return False
-
-        # Atualiza status inicial observado
-        self._update_follow_status(
-            restaurant_id=restaurant["id"],
-            persona_id=persona["id"],
-            restaurant_follows_persona=restaurant_follows,
-            persona_follows_restaurant=persona_follows,
-        )
-
-        # Se ainda não seguimos o restaurante, envia follow e permanece em standby
-        if not persona_follows:
-            followed = client.follow(rest_username)
-            if followed:
-                persona_follows = True
-                self._update_follow_status(
-                    restaurant_id=restaurant["id"],
-                    persona_id=persona["id"],
-                    persona_follows_restaurant=True,
-                )
-
-        # Somente se houver follow mútuo liberamos o envio de mensagem
-        if persona_follows and restaurant_follows:
-            return True
-
-        logger.info(
-            f"Follow ainda não é mútuo entre persona=@{persona.get('instagram_username')} "
-            f"e restaurante=@{rest_username} → standby, sem enviar mensagem agora."
-        )
-        return False
-
     def _send_multipart_dm(
         self,
         client: InstagramClient,
@@ -453,27 +375,11 @@ class CarouselAutomator:
                     start_index=0,
                 )
 
-                # 2) Se alguma parte falhar, aplica lógica de follow mútuo e retenta
-                if not success:
-                    logger.warning(
-                        f"Falha ao enviar para @{rest_username} na primeira tentativa, checando follow..."
-                    )
-
-                    if self._ensure_mutual_follow(client, restaurant, persona):
-                        # Retoma a partir da parte que falhou, se conhecida
-                        retry_start_index = failed_index if failed_index is not None else 0
-                        success, _ = self._send_multipart_dm(
-                            client,
-                            rest_username,
-                            next_phrase["text"],
-                            start_index=retry_start_index,
-                        )
-
                 # Emite evento para frontend via websocket hub (database-api).
                 # A emissão real é feita em `_log_message`, que tenta enriquecer o evento.
 
                 if not success:
-                    logger.warning(f"Falha ao enviar para @{rest_username} mesmo após checar follow")
+                    logger.warning(f"Falha ao enviar para @{rest_username}")
 
                 self._log_message(rest_id, persona["id"], next_phrase["id"], success)
 
