@@ -3,7 +3,7 @@ import logging
 import random
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -14,6 +14,7 @@ from selenium.common.exceptions import (
     NoSuchElementException,
     ElementNotInteractableException,
     StaleElementReferenceException,
+    InvalidElementStateException,
 )
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.chrome.service import Service
@@ -458,7 +459,7 @@ class InstagramClient:
                                 )
                                 logger.info("Encontrado 'Mais' após clicar no perfil")
                                 break
-                        except (TimeoutException, NoSuchElementException, StaleElementReferenceException):
+                        except (TimeoutException, NoSuchElementException, StaleElementReferenceException, InvalidElementStateException):
                             continue
             
             if not mais_span:
@@ -634,7 +635,7 @@ class InstagramClient:
             try:
                 trocar_conta_div = self.driver.find_element(
                     By.XPATH,
-                    "//div[contains(text(), 'Trocar de conta')]"
+                    "//span[contains(text(), 'Usar outro perfil')]"
                 )
                 if trocar_conta_div.is_displayed():
                     logger.info("Div 'Trocar de conta' encontrada. Clicando...")
@@ -819,7 +820,7 @@ class InstagramClient:
                 logger.error(f"Perfil @{target_username} não encontrado")
                 return False
             
-            wait = WebDriverWait(self.driver, 10)
+            wait = WebDriverWait(self.driver, 15)
             
             # Primeiro tenta encontrar uma DIV com o texto "Enviar mensagem"
             div_message_selectors = [
@@ -877,10 +878,10 @@ class InstagramClient:
                     
                     # Agora procura o button com texto "Enviar mensagem"
                     button_message_selectors = [
-                        "//button[contains(text(), 'Enviar mensagem')]",
-                        "//button[contains(text(), 'Send Message')]",
-                        "//button[text()='Enviar mensagem']",
-                        "//button[text()='Send Message']",
+                        "//div[contains(text(), 'Enviar mensagem')]",
+                        "//div[contains(text(), 'Send Message')]",
+                        "//div[text()='Enviar mensagem']",
+                        "//div[text()='Send Message']",
                     ]
                     
                     button_message = None
@@ -918,6 +919,65 @@ class InstagramClient:
             logger.error(f"Erro ao abrir conversa de DM com @{username}: {e}")
             return False
 
+    def _ensure_element_ready(self, element, wait: WebDriverWait, max_retries: int = 3):
+        """Garante que o elemento está pronto para interação."""
+        for attempt in range(max_retries):
+            try:
+                # Verifica se o elemento está visível e habilitado
+                if not element.is_displayed():
+                    logger.debug(f"Elemento não está visível (tentativa {attempt + 1})")
+                    return False
+                
+                if hasattr(element, 'is_enabled') and not element.is_enabled():
+                    logger.debug(f"Elemento não está habilitado (tentativa {attempt + 1})")
+                    return False
+                
+                # Para elementos contenteditable, verifica se está editável
+                if element.tag_name == "div" and element.get_attribute("contenteditable") == "true":
+                    # Verifica se o elemento está realmente editável
+                    is_editable = self.driver.execute_script(
+                        "return arguments[0].isContentEditable && document.activeElement === arguments[0];",
+                        element
+                    )
+                    if not is_editable:
+                        # Tenta focar no elemento
+                        self.driver.execute_script("arguments[0].focus();", element)
+                        self._human_delay(0.2, 0.4)
+                
+                return True
+            except (StaleElementReferenceException, InvalidElementStateException) as e:
+                logger.debug(f"Elemento inválido na tentativa {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    self._human_delay(0.3, 0.5)
+                return False
+            except Exception as e:
+                logger.debug(f"Erro ao verificar elemento na tentativa {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    self._human_delay(0.3, 0.5)
+                return False
+        return False
+
+    def _find_message_field(self, wait: WebDriverWait, retries: int = 3):
+        """Encontra o campo de mensagem, com retry para lidar com elementos stale."""
+        message_field_selectors = [
+            'div[aria-placeholder*="Mensagem..." i]',
+        ]
+        
+        for attempt in range(retries):
+            for selector in message_field_selectors:
+                try:
+                    message_field = wait.until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    if message_field.is_displayed():
+                        return message_field
+                except (TimeoutException, StaleElementReferenceException):
+                    continue
+            if attempt < retries - 1:
+                self._human_delay(0.5, 1.0)
+        
+        return None
+
     def send_dm(self, username: str, message: str) -> bool:
         """Envia uma mensagem na conversa de DM já aberta.
         
@@ -932,91 +992,246 @@ class InstagramClient:
             wait = WebDriverWait(self.driver, 10)
             
             # Encontra o campo de mensagem (já deve estar visível)
-            message_field_selectors = [
-                'div[aria-label*="Mensagem" i]',
-            ]
-            
-            message_field = None
-            for selector in message_field_selectors:
-                try:
-                    message_field = wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
-                    )
-                    if message_field.is_displayed():
-                        break
-                except TimeoutException:
-                    continue
+            message_field = self._find_message_field(wait)
             
             if not message_field:
                 logger.error("Não foi possível encontrar campo de texto para mensagem")
                 return False
             
-            # Digita a mensagem
-            self._human_click(message_field)
-            self._human_delay(0.5, 1.0)
-            
-            message_field.clear()
-            self._human_type(message_field, message)
-            
-            self._human_delay(1, 2)
-            
-            # Primeiro tenta enviar com Enter
-            logger.info("Tentando enviar mensagem com Enter...")
-            self._human_click(message_field)
-            self._human_delay(0.3, 0.5)
-            message_field.send_keys(Keys.RETURN)
-            
-            # Aguarda um pouco para ver se a mensagem foi enviada
-            self._human_delay(1, 2)
-            
-            # Verifica se o Enter funcionou
-            # Se o campo foi limpo ou se o texto mudou, provavelmente funcionou
-            enter_worked = False
+            # Digita a mensagem - re-encontra o elemento antes de cada ação crítica
             try:
-                # Tenta obter o texto atual do campo
-                current_text = ""
-                if message_field.tag_name == "div" and message_field.get_attribute("contenteditable") == "true":
-                    current_text = message_field.text or message_field.get_attribute("innerText") or ""
-                else:
-                    current_text = message_field.get_attribute("value") or message_field.text or ""
+                # Re-encontra antes de clicar
+                message_field = self._find_message_field(wait)
+                if not message_field:
+                    logger.error("Não foi possível encontrar campo de texto antes de clicar")
+                    return False
                 
-                # Se o campo está vazio ou não contém mais a mensagem completa, provavelmente funcionou
-                if not current_text or message not in current_text:
-                    enter_worked = True
-                    logger.info("Enter funcionou! Mensagem enviada com sucesso.")
-                else:
-                    logger.info(f"Enter não funcionou. Campo ainda contém: '{current_text[:50]}...'")
-            except Exception as e:
-                logger.warning(f"Erro ao verificar se Enter funcionou: {e}. Tentando botões de envio...")
-            
-            # Se o Enter não funcionou, procura os botões de envio
-            if not enter_worked:
-                logger.info("Enter não funcionou. Procurando botões de envio...")
+                # Garante que o elemento está pronto
+                if not self._ensure_element_ready(message_field, wait):
+                    logger.warning("Elemento não está pronto, tentando re-encontrar...")
+                    message_field = self._find_message_field(wait)
+                    if not message_field or not self._ensure_element_ready(message_field, wait):
+                        logger.error("Não foi possível preparar campo de texto para interação")
+                        return False
                 
-                # Lista de seletores XPath para o botão de enviar
-                send_field_selectors = [
-                    "//div[contains(text(), 'Enviar')]",
-                    "//div[aria-label='Enviar']",
-                    "//svg[aria-label='Send']",
-                ]
-                
-                send_field = None
-                for selector in send_field_selectors:
+                # Foca no campo de mensagem
+                try:
+                    if message_field.tag_name == "div" and message_field.get_attribute("contenteditable") == "true":
+                        # Usa JavaScript para focar em elementos contenteditable
+                        self.driver.execute_script("arguments[0].focus();", message_field)
+                        self._human_delay(0.3, 0.5)
+                    self._human_click(message_field)
+                    self._human_delay(0.5, 1.0)
+                except (InvalidElementStateException, ElementNotInteractableException) as e:
+                    logger.warning(f"Erro ao focar no campo: {e}. Tentando método alternativo...")
+                    # Tenta focar via JavaScript
                     try:
-                        send_field = wait.until(
-                            EC.element_to_be_clickable((By.XPATH, selector))
-                        )
-                        if send_field.is_displayed() and send_field.is_enabled():
-                            logger.info(f"Botão de enviar encontrado via XPath: {selector}")
-                            break
-                    except (TimeoutException, NoSuchElementException):
-                        continue
+                        self.driver.execute_script("arguments[0].focus();", message_field)
+                        self.driver.execute_script("arguments[0].click();", message_field)
+                        self._human_delay(0.5, 1.0)
+                    except Exception as e2:
+                        logger.error(f"Erro ao focar via JavaScript: {e2}")
+                        return False
                 
-                if send_field:
-                    logger.info("Clicando no botão de enviar")
-                    self._human_click(send_field)
-                else:
-                    logger.warning("Não foi possível encontrar botão de envio. Mensagem pode não ter sido enviada.")
+                # Re-encontra antes de limpar
+                message_field = self._find_message_field(wait)
+                if not message_field:
+                    logger.error("Não foi possível encontrar campo de texto antes de limpar")
+                    return False
+                
+                # Limpa o campo de forma segura
+                try:
+                    if message_field.tag_name == "div" and message_field.get_attribute("contenteditable") == "true":
+                        # Limpa usando JavaScript para elementos contenteditable
+                        self.driver.execute_script("arguments[0].innerText = '';", message_field)
+                        self.driver.execute_script("arguments[0].textContent = '';", message_field)
+                        # Também tenta com send_keys
+                        message_field.send_keys(Keys.CONTROL + "a")
+                        message_field.send_keys(Keys.DELETE)
+                    else:
+                        message_field.clear()
+                except (StaleElementReferenceException, ElementNotInteractableException, InvalidElementStateException) as e:
+                    # Se falhar, tenta re-encontrar e usar método alternativo
+                    logger.warning(f"Erro ao limpar campo: {e}. Tentando método alternativo...")
+                    message_field = self._find_message_field(wait)
+                    if message_field:
+                        try:
+                            # Foca novamente
+                            self.driver.execute_script("arguments[0].focus();", message_field)
+                            message_field.send_keys(Keys.CONTROL + "a")
+                            message_field.send_keys(Keys.DELETE)
+                        except Exception as e2:
+                            logger.error(f"Erro ao limpar com método alternativo: {e2}")
+                            return False
+                
+                self._human_delay(0.3, 0.5)
+                
+                # Re-encontra antes de digitar
+                message_field = self._find_message_field(wait)
+                if not message_field:
+                    logger.error("Não foi possível encontrar campo de texto antes de digitar")
+                    return False
+                
+                # Garante que está pronto antes de digitar
+                if not self._ensure_element_ready(message_field, wait):
+                    logger.warning("Campo não está pronto para digitar, tentando focar novamente...")
+                    try:
+                        self.driver.execute_script("arguments[0].focus();", message_field)
+                        self._human_delay(0.2, 0.4)
+                    except Exception:
+                        pass
+                
+                # Digita a mensagem
+                logger.info(f"Digitando mensagem: {message[:50]}...")
+                try:
+                    self._human_type(message_field, message)
+                except (InvalidElementStateException, ElementNotInteractableException) as e:
+                    logger.warning(f"Erro ao digitar: {e}. Tentando via JavaScript...")
+                    # Tenta digitar via JavaScript como último recurso
+                    try:
+                        self.driver.execute_script(f"arguments[0].innerText = '{message}';", message_field)
+                        self.driver.execute_script(f"arguments[0].textContent = '{message}';", message_field)
+                        # Dispara evento de input
+                        self.driver.execute_script("""
+                            var event = new Event('input', { bubbles: true });
+                            arguments[0].dispatchEvent(event);
+                        """, message_field)
+                        self._human_delay(1, 2)
+                    except Exception as e2:
+                        logger.error(f"Erro ao digitar via JavaScript: {e2}")
+                        return False
+                
+                self._human_delay(1, 2)
+                
+                # Primeiro tenta enviar com Enter
+                logger.info("Tentando enviar mensagem com Enter...")
+                
+                # Re-encontra antes de enviar com Enter
+                message_field = self._find_message_field(wait)
+                if not message_field:
+                    logger.error("Não foi possível encontrar campo de texto antes de enviar")
+                    return False
+                
+                try:
+                    # Garante que está focado
+                    self.driver.execute_script("arguments[0].focus();", message_field)
+                    self._human_delay(0.2, 0.4)
+                    message_field.send_keys(Keys.RETURN)
+                except (StaleElementReferenceException, InvalidElementStateException, ElementNotInteractableException) as e:
+                    # Se o elemento ficou stale ou inválido, re-encontra e tenta novamente
+                    logger.warning(f"Erro ao enviar com Enter: {e}. Re-encontrando...")
+                    message_field = self._find_message_field(wait)
+                    if message_field:
+                        try:
+                            self.driver.execute_script("arguments[0].focus();", message_field)
+                            message_field.send_keys(Keys.RETURN)
+                        except Exception as e2:
+                            logger.error(f"Erro ao tentar enviar novamente: {e2}")
+                            # Tenta encontrar botão de enviar como fallback
+                            pass
+                
+                # Aguarda um pouco para ver se a mensagem foi enviada
+                self._human_delay(1, 2)
+                
+                # Verifica se o Enter funcionou
+                # Se o campo foi limpo ou se o texto mudou, provavelmente funcionou
+                enter_worked = False
+                try:
+                    # Re-encontra para verificar o texto
+                    message_field = self._find_message_field(wait)
+                    if message_field:
+                        # Tenta obter o texto atual do campo
+                        current_text = ""
+                        try:
+                            if message_field.tag_name == "div" and message_field.get_attribute("contenteditable") == "true":
+                                current_text = message_field.text or message_field.get_attribute("innerText") or ""
+                            else:
+                                current_text = message_field.get_attribute("value") or message_field.text or ""
+                        except StaleElementReferenceException:
+                            # Se ficou stale, tenta re-encontrar uma última vez
+                            message_field = self._find_message_field(wait)
+                            if message_field:
+                                if message_field.tag_name == "div" and message_field.get_attribute("contenteditable") == "true":
+                                    current_text = message_field.text or message_field.get_attribute("innerText") or ""
+                                else:
+                                    current_text = message_field.get_attribute("value") or message_field.text or ""
+                        
+                        # Se o campo está vazio ou não contém mais a mensagem completa, provavelmente funcionou
+                        if not current_text or message not in current_text:
+                            enter_worked = True
+                            logger.info("Enter funcionou! Mensagem enviada com sucesso.")
+                        else:
+                            logger.info(f"Enter não funcionou. Campo ainda contém: '{current_text[:50]}...'")
+                except Exception as e:
+                    logger.warning(f"Erro ao verificar se Enter funcionou: {e}. Tentando botões de envio...")
+                
+                # Se o Enter não funcionou, procura os botões de envio
+                if not enter_worked:
+                    logger.info("Enter não funcionou. Procurando botões de envio...")
+                    
+                    # Lista de seletores XPath para o botão de enviar
+                    send_field_selectors = [
+                        "//div[contains(text(), 'Enviar')]",
+                        "//div[aria-label='Enviar']",
+                        "//svg[aria-label='Send']",
+                        "//button[contains(@aria-label, 'Enviar')]",
+                        "//button[contains(@aria-label, 'Send')]",
+                    ]
+                    
+                    send_field = None
+                    for selector in send_field_selectors:
+                        try:
+                            send_field = wait.until(
+                                EC.element_to_be_clickable((By.XPATH, selector))
+                            )
+                            if send_field.is_displayed() and send_field.is_enabled():
+                                logger.info(f"Botão de enviar encontrado via XPath: {selector}")
+                                break
+                        except (TimeoutException, NoSuchElementException, StaleElementReferenceException, InvalidElementStateException):
+                            continue
+                    
+                    if send_field:
+                        try:
+                            logger.info("Clicando no botão de enviar")
+                            self._human_click(send_field)
+                        except StaleElementReferenceException:
+                            # Re-encontra o botão e tenta novamente
+                            logger.warning("Botão de enviar ficou stale, re-encontrando...")
+                            for selector in send_field_selectors:
+                                try:
+                                    send_field = wait.until(
+                                        EC.element_to_be_clickable((By.XPATH, selector))
+                                    )
+                                    if send_field.is_displayed() and send_field.is_enabled():
+                                        self._human_click(send_field)
+                                        break
+                                except (TimeoutException, NoSuchElementException, StaleElementReferenceException, InvalidElementStateException):
+                                    continue
+                    else:
+                        logger.warning("Não foi possível encontrar botão de envio. Mensagem pode não ter sido enviada.")
+                
+            except (StaleElementReferenceException, InvalidElementStateException, ElementNotInteractableException) as e:
+                logger.error(f"Erro durante o envio da mensagem: {e}")
+                # Tenta uma última vez re-encontrando o elemento
+                message_field = self._find_message_field(wait)
+                if message_field:
+                    try:
+                        # Foca via JavaScript
+                        self.driver.execute_script("arguments[0].focus();", message_field)
+                        self._human_delay(0.3, 0.5)
+                        # Limpa e digita
+                        self.driver.execute_script("arguments[0].innerText = '';", message_field)
+                        message_field.send_keys(message)
+                        self._human_delay(0.5, 1.0)
+                        # Envia
+                        message_field.send_keys(Keys.RETURN)
+                        self._human_delay(2, 4)
+                        logger.info("Mensagem enviada após recuperação de erro")
+                        return True
+                    except Exception as e2:
+                        logger.error(f"Erro ao tentar recuperar e enviar: {e2}")
+                        return False
+                return False
             
             self._human_delay(2, 4)
             
@@ -1025,209 +1240,6 @@ class InstagramClient:
             
         except Exception as e:
             logger.error(f"Erro ao enviar mensagem para @{username}: {e}")
-            return False
-
-    def check_mutual_follow(self, other_username: str) -> Tuple[bool, bool]:
-        """Retorna (eu_sigo_ele, ele_me_segue) para o usuário alvo."""
-        if not self.driver:
-            logger.error("Driver não inicializado")
-            return False, False
-        
-        try:
-            target_username = other_username.strip().lower().replace("@", "")
-            logger.info(f"Verificando follow mútuo com @{target_username}")
-            
-            # Navega para o perfil
-            profile_url = f"https://www.instagram.com/{target_username}/"
-            self.driver.get(profile_url)
-            self._human_delay(2, 4)
-            
-            # Verifica se o perfil existe
-            if "Sorry, this page isn't available" in self.driver.page_source:
-                logger.error(f"Perfil @{target_username} não encontrado")
-                return False, False
-            
-            # Verifica se a persona segue o restaurante
-            # Procura botões de follow/unfollow para determinar o estado
-            following_xpath = "//button[contains(text(), 'Following') or contains(text(), 'Seguindo') or contains(text(), 'Requested') or contains(text(), 'Solicitado')]"
-            follow_xpath = "//button[contains(text(), 'Follow') or contains(text(), 'Seguir')]"
-            
-            persona_follows = False
-            try:
-                following_button = self.driver.find_element(By.XPATH, following_xpath)
-                if following_button.is_displayed():
-                    persona_follows = True
-            except NoSuchElementException:
-                pass
-            
-            # Para verificar se o restaurante segue a persona, precisamos verificar
-            # se conseguimos ver o botão de mensagem (que geralmente só aparece se houver follow mútuo)
-            # ou verificar a lista de seguidores do restaurante
-            restaurant_follows = False
-            
-            # Tenta verificar através do botão de mensagem
-            # Se o botão de mensagem está disponível, pode indicar que nos segue
-            try:
-                message_button = self.driver.find_element(
-                    By.XPATH,
-                    "//button[contains(text(), 'Message') or contains(text(), 'Mensagem')] | //a[contains(text(), 'Message') or contains(text(), 'Mensagem')]"
-                )
-                if message_button.is_displayed():
-                    # Se há botão de mensagem, há chance de que nos siga
-                    # Mas não é garantia, então vamos tentar uma verificação mais precisa
-                    restaurant_follows = None  # Indeterminado
-            except NoSuchElementException:
-                pass
-            
-            # Tenta verificar através da lista de seguidores (mais preciso)
-            # Navega para a lista de seguidores do restaurante
-            try:
-                # Procura pelo link de seguidores (pode estar em diferentes formatos)
-                followers_selectors = [
-                    "//a[contains(@href, '/followers/')]",
-                    "//a[contains(text(), 'followers') or contains(text(), 'seguidores')]",
-                ]
-                
-                followers_link = None
-                for selector in followers_selectors:
-                    try:
-                        followers_link = self.driver.find_element(By.XPATH, selector)
-                        break
-                    except NoSuchElementException:
-                        continue
-                
-                if followers_link:
-                    followers_url = followers_link.get_attribute("href")
-                    if not followers_url:
-                        # Tenta construir a URL
-                        followers_url = f"https://www.instagram.com/{target_username}/followers/"
-                    
-                    self.driver.get(followers_url)
-                    self._human_delay(2, 4)
-                    
-                    # Procura pelo nosso username na lista de seguidores
-                    current_username = self.username.lower()
-                    
-                    # Verifica se há links com nosso username na lista
-                    try:
-                        # Procura por links que contenham nosso username
-                        our_profile_links = self.driver.find_elements(
-                            By.XPATH,
-                            f"//a[contains(@href, '/{current_username}/')]"
-                        )
-                        # Verifica se algum link está visível e contém nosso username
-                        for link in our_profile_links:
-                            try:
-                                href = link.get_attribute("href")
-                                if href and current_username in href.lower():
-                                    restaurant_follows = True
-                                    break
-                            except StaleElementReferenceException:
-                                continue
-                        
-                        if restaurant_follows is None:
-                            restaurant_follows = False
-                    except Exception as e:
-                        logger.debug(f"Erro ao verificar seguidores: {e}")
-                        restaurant_follows = False
-                    
-                    # Volta para o perfil
-                    self.driver.get(profile_url)
-                    self._human_delay(1, 2)
-            except (NoSuchElementException, Exception) as e:
-                # Se não conseguir acessar lista de seguidores, assume False
-                logger.debug(f"Não foi possível verificar lista de seguidores: {e}")
-                if restaurant_follows is None:
-                    restaurant_follows = False
-            
-            # Se ainda não determinou, usa heurística baseada em mensagem
-            if restaurant_follows is None:
-                restaurant_follows = False
-            
-            logger.info(
-                f"Follow status: persona segue restaurante={persona_follows}, "
-                f"restaurante segue persona={restaurant_follows}"
-            )
-            
-            return persona_follows, restaurant_follows
-            
-        except Exception as e:
-            logger.error(f"Erro ao verificar follow com @{other_username}: {e}")
-            return False, False
-
-    def follow(self, username: str) -> bool:
-        """Segue o usuário indicado."""
-        if not self.driver:
-            logger.error("Driver não inicializado")
-            return False
-        
-        try:
-            target_username = username.strip().lower().replace("@", "")
-            logger.info(f"Seguindo @{target_username}")
-            
-            # Navega para o perfil
-            profile_url = f"https://www.instagram.com/{target_username}/"
-            self.driver.get(profile_url)
-            self._human_delay(2, 4)
-            
-            # Verifica se o perfil existe
-            if "Sorry, this page isn't available" in self.driver.page_source:
-                logger.error(f"Perfil @{target_username} não encontrado")
-                return False
-            
-            # Procura botão de follow
-            follow_button_selectors = [
-                'button:contains("Follow")',
-                'button:contains("Seguir")',
-            ]
-            
-            follow_button = None
-            wait = WebDriverWait(self.driver, 10)
-            
-            for selector in follow_button_selectors:
-                try:
-                    follow_button = wait.until(
-                        EC.element_to_be_clickable((
-                            By.XPATH,
-                            "//button[contains(text(), 'Follow') or contains(text(), 'Seguir')]"
-                        ))
-                    )
-                    break
-                except TimeoutException:
-                    continue
-            
-            if not follow_button:
-                # Pode já estar seguindo
-                following_button = self.driver.find_elements(
-                    By.XPATH,
-                    "//button[contains(text(), 'Following') or contains(text(), 'Seguindo')]"
-                )
-                if following_button:
-                    logger.info(f"Já está seguindo @{target_username}")
-                    return True
-                
-                logger.error(f"Não foi possível encontrar botão de follow para @{target_username}")
-                return False
-            
-            self._human_click(follow_button)
-            self._human_delay(2, 4)
-            
-            # Verifica se o follow foi bem-sucedido
-            following_indicators = self.driver.find_elements(
-                By.XPATH,
-                "//button[contains(text(), 'Following') or contains(text(), 'Seguindo') or contains(text(), 'Requested') or contains(text(), 'Solicitado')]"
-            )
-            
-            if following_indicators:
-                logger.info(f"Follow enviado com sucesso para @{target_username}")
-                self._human_delay(self.wait_min_seconds, self.wait_max_seconds)
-                return True
-            else:
-                logger.warning(f"Follow pode não ter sido aplicado para @{target_username}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Erro ao seguir @{username}: {e}")
             return False
 
     def __del__(self):
