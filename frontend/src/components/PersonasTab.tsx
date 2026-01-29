@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import type { Persona } from "../types/domain";
-import { fetchPersonas, createPersona, createPersonasBulk, updatePersona, deletePersona } from "../api/personasApi";
+import { fetchPersonas, createPersona, createPersonasBulk, updatePersona, deletePersona, deleteAllPersonas } from "../api/personasApi";
 
 export function PersonasTab() {
   const [personas, setPersonas] = useState<Persona[]>([]);
@@ -41,6 +41,58 @@ export function PersonasTab() {
     }
   }
 
+  async function handleDeleteAllPersonas() {
+    resetMessages();
+    const ok = window.confirm(
+      "ATENÇÃO: isso vai deletar TODAS as personas (e logs/inbox relacionados) do banco. Essa ação é irreversível.\n\nDeseja continuar?"
+    );
+    if (!ok) return;
+
+    setLoading(true);
+    try {
+      const result = await deleteAllPersonas();
+      const data = await fetchPersonas({ force: true });
+      setPersonas(data || []);
+      setSuccess(`Personas removidas: ${result?.deleted ?? 0}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao deletar todas as personas");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Função auxiliar para fazer parse de CSV corretamente, lidando com aspas
+  function parseCSVLine(line: string): string[] {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          // Aspas duplas dentro de campo entre aspas (escape)
+          current += '"';
+          i++; // Pula o próximo caractere
+        } else {
+          // Toggle do estado de aspas
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        // Vírgula fora de aspas = separador de campo
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    
+    // Adiciona o último campo
+    result.push(current.trim());
+    return result;
+  }
+
   async function handleImportCsv(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -59,16 +111,40 @@ export function PersonasTab() {
         throw new Error("CSV vazio");
       }
 
-      const [header, ...rows] = lines;
-      const cols = header.split(",").map((c) => c.trim());
+      // Primeira linha deve ser o header
+      const header = lines[0];
+      const cols = parseCSVLine(header).map((c) => c.trim());
 
-      const idxName = cols.indexOf("name");
-      const idxUsername = cols.indexOf("instagram_username");
-      const idxPassword = cols.indexOf("instagram_password");
+      // Valida formato específico: deve conter "Nome", "Instagram" e "Senha Instagram"
+      const idxName = cols.findIndex((c) => c.toLowerCase() === "nome");
+      const idxInstagram = cols.findIndex((c) => c.toLowerCase() === "instagram");
+      const idxPassword = cols.findIndex((c) => c.toLowerCase().includes("senha") && c.toLowerCase().includes("instagram"));
 
-      if (idxUsername === -1 || idxPassword === -1) {
-        throw new Error("CSV deve conter as colunas instagram_username e instagram_password");
+      if (idxName === -1) {
+        throw new Error("CSV deve conter a coluna 'Nome'");
       }
+      if (idxInstagram === -1) {
+        throw new Error("CSV deve conter a coluna 'Instagram'");
+      }
+      if (idxPassword === -1) {
+        throw new Error("CSV deve conter a coluna 'Senha Instagram'");
+      }
+
+      // Valida que é o formato esperado (pelo menos deve ter essas colunas)
+      const expectedFormat = "Sequência,Nome,Instagram,Data última utilização,Bloco de Clientes,Modelo do Celular,Número do Celular,Senha Instagram";
+      const headerNormalized = header.toLowerCase().replace(/\s+/g, " ");
+      
+      // Verifica se o header contém as colunas esperadas (não precisa ser exatamente igual devido a variações)
+      const hasExpectedColumns = 
+        headerNormalized.includes("nome") &&
+        headerNormalized.includes("instagram") &&
+        headerNormalized.includes("senha");
+
+      if (!hasExpectedColumns) {
+        throw new Error(`Formato de CSV inválido. Esperado formato: ${expectedFormat}`);
+      }
+
+      const rows = lines.slice(1); // Pula o header
 
       const current = await fetchPersonas({ force: true });
       const existing = new Set(
@@ -84,22 +160,42 @@ export function PersonasTab() {
       }[] = [];
 
       for (const row of rows) {
-        const parts = row.split(",").map((c) => c.trim());
-        const rawUsername = parts[idxUsername];
-        const password = parts[idxPassword];
-        if (!rawUsername || !password) {
+        if (!row.trim()) continue; // Pula linhas vazias
+        
+        const parts = parseCSVLine(row);
+        
+        // Extrai os campos específicos
+        const name = parts[idxName]?.trim() || "";
+        const rawInstagram = parts[idxInstagram]?.trim() || "";
+        const password = parts[idxPassword]?.trim() || "";
+
+        // Remove aspas se existirem
+        const cleanName = name.replace(/^["']|["']$/g, "").trim();
+        const cleanInstagram = rawInstagram.replace(/^["']|["']$/g, "").trim();
+        const cleanPassword = password.replace(/^["']|["']$/g, "").trim();
+
+        // Valida campos obrigatórios
+        if (!cleanInstagram || !cleanPassword) {
           skipped++;
           continue;
         }
-        const username = rawUsername.toLowerCase().replace(/^@/, "").trim();
+
+        // Processa username: remove @ e converte para lowercase
+        const username = cleanInstagram.toLowerCase().replace(/^@/, "").trim();
+        
         if (!username || existing.has(username)) {
           skipped++;
           continue;
         }
 
-        const name = idxName >= 0 ? parts[idxName] || username : username;
+        // Usa o nome do CSV ou o username como fallback
+        const finalName = cleanName || username;
 
-        toCreate.push({ name, instagram_username: username, instagram_password: password });
+        toCreate.push({ 
+          name: finalName, 
+          instagram_username: username, 
+          instagram_password: cleanPassword 
+        });
         existing.add(username);
         totalToCreate++;
       }
@@ -248,6 +344,14 @@ export function PersonasTab() {
             className="px-3 py-1 text-xs rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-600"
           >
             Recarregar
+          </button>
+          <button
+            onClick={handleDeleteAllPersonas}
+            className="px-3 py-1 text-xs rounded-md bg-red-950 hover:bg-red-900 border border-red-800 text-red-200"
+            disabled={loading || creating || updating}
+            title="Deleta todas as personas"
+          >
+            Deletar tudo
           </button>
           <label className="text-xs px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-600 cursor-pointer">
             Importar CSV

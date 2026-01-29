@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import type { Phrase } from "../types/domain";
-import { fetchPhrases, createPhrase, createPhrasesBulk, updatePhrase, deletePhrase } from "../api/phrasesApi";
+import { fetchPhrases, createPhrase, createPhrasesBulk, updatePhrase, deletePhrase, deleteAllPhrases } from "../api/phrasesApi";
 
 export function PhrasesTab() {
   const [phrases, setPhrases] = useState<Phrase[]>([]);
@@ -48,6 +48,32 @@ export function PhrasesTab() {
     }
   }
 
+  async function handleDeleteAllPhrases() {
+    resetMessages();
+    const ok = window.confirm(
+      "ATENÇÃO: isso vai deletar TODAS as frases (e logs relacionados) do banco. Essa ação é irreversível.\n\nDeseja continuar?"
+    );
+    if (!ok) return;
+
+    setLoading(true);
+    try {
+      const result = await deleteAllPhrases();
+      const data = await fetchPhrases({ force: true });
+      const list = data || [];
+      setPhrases(list);
+      let maxOrder = -1;
+      for (const ph of list) {
+        if (typeof ph.order === "number" && ph.order > maxOrder) maxOrder = ph.order;
+      }
+      setNewPhrase((prev) => ({ ...prev, order: maxOrder + 1 }));
+      setSuccess(`Frases removidas: ${result?.deleted ?? 0}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao deletar todas as frases");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const filteredPhrases = useMemo(() => {
     if (!searchQuery.trim()) return phrases;
     const query = searchQuery.toLowerCase();
@@ -56,6 +82,38 @@ export function PhrasesTab() {
 
   const clientes = useMemo(() => filteredPhrases.filter((ph) => ph.cliente), [filteredPhrases]);
   const naoClientes = useMemo(() => filteredPhrases.filter((ph) => !ph.cliente), [filteredPhrases]);
+
+  // Função auxiliar para fazer parse de CSV corretamente, lidando com aspas
+  function parseCSVLine(line: string): string[] {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          // Aspas duplas dentro de campo entre aspas (escape)
+          current += '"';
+          i++; // Pula o próximo caractere
+        } else {
+          // Toggle do estado de aspas
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        // Vírgula fora de aspas = separador de campo
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    
+    // Adiciona o último campo
+    result.push(current.trim());
+    return result;
+  }
 
   async function handleImportCsv(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -75,18 +133,44 @@ export function PhrasesTab() {
         throw new Error("CSV vazio");
       }
 
-      const [header, ...rows] = lines;
-      const cols = header.split(",").map((c) => c.trim());
-
-      const idxText = cols.indexOf("Frase");
-
-      if (idxText === -1) {
-        throw new Error("CSV deve conter a coluna Frase");
+      // Filtra linhas de comentário (começam com #)
+      const nonCommentLines = lines.filter((line) => !line.startsWith("#"));
+      
+      if (nonCommentLines.length === 0) {
+        throw new Error("CSV contém apenas comentários");
       }
+
+      // Procura pelo header (primeira linha não comentada que contém "Frase")
+      let headerLine = "";
+      let headerIndex = -1;
+      let idxText = -1;
+      
+      for (let i = 0; i < nonCommentLines.length; i++) {
+        const cols = parseCSVLine(nonCommentLines[i]);
+        const foundIdx = cols.findIndex((c) => c.toLowerCase().includes("frase"));
+        if (foundIdx !== -1) {
+          headerLine = nonCommentLines[i];
+          headerIndex = i;
+          idxText = foundIdx;
+          break;
+        }
+      }
+
+      // Se não encontrou header com "Frase", assume que:
+      // - Primeira coluna = número/ID (ignorado)
+      // - Segunda coluna ou última coluna = texto da frase
+      if (headerIndex === -1 || idxText === -1) {
+        // Assume formato: número,texto
+        // O texto estará na última coluna (geralmente coluna 1, índice 1)
+        idxText = -1; // Usaremos lógica especial: pegar última coluna não vazia
+      }
+
+      // Processa as linhas após o header (se encontrado) ou todas as linhas não comentadas
+      const rows = headerIndex !== -1 ? nonCommentLines.slice(headerIndex + 1) : nonCommentLines;
 
       const current = await fetchPhrases({ force: true });
       const existing = new Set(
-        (current || []).map((ph) => `${(ph.text || "").trim()}::${ph.order ?? ""}`)
+        (current || []).map((ph) => `${(ph.text || "").trim().toLowerCase()}::${ph.order ?? ""}`)
       );
 
       // Calcula o maior índice de ordem já existente e começa do próximo,
@@ -108,14 +192,40 @@ export function PhrasesTab() {
       }[] = [];
 
       for (const row of rows) {
-        const parts = row.split(",").map((c) => c.trim());
-        const phraseText = parts[idxText];
+        if (!row.trim()) continue; // Pula linhas vazias
+        
+        const parts = parseCSVLine(row);
+        
+        // Determina qual coluna contém o texto da frase
+        let phraseText = "";
+        if (idxText >= 0 && parts.length > idxText) {
+          // Usa a coluna especificada pelo header
+          phraseText = parts[idxText];
+        } else if (parts.length > 1) {
+          // Se não tem header válido, assume formato: número,texto
+          // Pega a última coluna não vazia (geralmente índice 1)
+          for (let i = parts.length - 1; i >= 0; i--) {
+            if (parts[i].trim()) {
+              phraseText = parts[i];
+              break;
+            }
+          }
+        } else if (parts.length === 1) {
+          // Se só tem uma coluna, usa ela
+          phraseText = parts[0];
+        }
+        
+        // Remove aspas do início e fim se existirem
+        phraseText = phraseText.replace(/^["']|["']$/g, "");
+        phraseText = phraseText.trim();
+        
         if (!phraseText) {
           skipped++;
           continue;
         }
+        
         const order = nextOrder;
-        const key = `${phraseText.trim()}::${order}`;
+        const key = `${phraseText.toLowerCase()}::${order}`;
         if (existing.has(key)) {
           skipped++;
           continue;
@@ -291,6 +401,14 @@ export function PhrasesTab() {
             className="px-3 py-1 text-xs rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-600"
           >
             Recarregar
+          </button>
+          <button
+            onClick={handleDeleteAllPhrases}
+            className="px-3 py-1 text-xs rounded-md bg-red-950 hover:bg-red-900 border border-red-800 text-red-200"
+            disabled={loading || creating || updating}
+            title="Deleta todas as frases"
+          >
+            Deletar tudo
           </button>
           <label className="text-xs px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-600 cursor-pointer">
             Importar CSV

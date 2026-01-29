@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import type { Restaurant } from "../types/domain";
-import { fetchRestaurants, createRestaurant, createRestaurantsBulk, updateRestaurant, deleteRestaurant } from "../api/restaurantsApi";
+import { fetchRestaurants, createRestaurant, createRestaurantsBulk, updateRestaurant, deleteRestaurant, deleteAllRestaurants } from "../api/restaurantsApi";
 
 export function RestaurantsTab() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
@@ -50,6 +50,26 @@ export function RestaurantsTab() {
   const clientes = useMemo(() => filteredRestaurants.filter((r) => r.cliente), [filteredRestaurants]);
   const naoClientes = useMemo(() => filteredRestaurants.filter((r) => !r.cliente), [filteredRestaurants]);
 
+  async function handleDeleteAllRestaurants() {
+    resetMessages();
+    const ok = window.confirm(
+      "ATENÇÃO: isso vai deletar TODOS os restaurantes (e logs relacionados) do banco. Essa ação é irreversível.\n\nDeseja continuar?"
+    );
+    if (!ok) return;
+
+    setLoading(true);
+    try {
+      const result = await deleteAllRestaurants();
+      const data = await fetchRestaurants({ force: true });
+      setRestaurants(data || []);
+      setSuccess(`Restaurantes removidos: ${result?.deleted ?? 0}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro ao deletar todos os restaurantes");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleImportCsv(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -68,24 +88,32 @@ export function RestaurantsTab() {
         throw new Error("CSV vazio");
       }
 
-      const [header, ...rows] = lines;
+      // Pula a primeira linha (banner irrelevante) e usa a segunda como header
+      if (lines.length < 2) {
+        throw new Error("CSV deve ter pelo menos 2 linhas (banner + header)");
+      }
+
+      const [banner, header, ...rows] = lines;
       const cols = header.split(",").map((c) => c.trim());
 
-      const idxUsername = cols.indexOf("INSTAGRAM");
-      const idxName = cols.indexOf("RESTAURANTE");
-      const idxBloco = cols.indexOf("Bloco");
+      // Busca case-insensitive e com espaços
+      const idxUsername = cols.findIndex((c) => c.trim().toUpperCase().includes("INSTAGRAM"));
+      const idxName = cols.findIndex((c) => c.trim().toUpperCase().includes("RESTAURANTE"));
+      const idxBloco = cols.findIndex((c) => c.trim().toLowerCase().includes("bloco"));
+      const idxCliente = cols.findIndex((c) => c.trim().toLowerCase().includes("cliente"));
 
       if (idxUsername === -1) {
-        throw new Error("CSV deve conter a coluna INSTAGRAM");
+        throw new Error(`CSV deve conter a coluna INSTAGRAM. Colunas encontradas: ${cols.join(", ")}`);
       }
 
       if (idxName === -1) {
         throw new Error("CSV deve conter a coluna RESTAURANTE");
       }
 
-      if (idxBloco === -1) {
-        throw new Error("CSV deve conter a coluna Bloco");
-      }
+      // Coluna Bloco é opcional - se não existir, o backend atribuirá automaticamente
+      // if (idxBloco === -1) {
+      //   throw new Error("CSV deve conter a coluna Bloco");
+      // }
 
       const current = await fetchRestaurants({ force: true });
       const existing = new Set(
@@ -94,38 +122,133 @@ export function RestaurantsTab() {
 
       let totalToCreate = 0;
       let skipped = 0;
-      const toCreate: {
+      let toCreate: {
         instagram_username: string;
         name: string;
         bloco?: number;
         cliente: boolean;
       }[] = [];
 
+      // Função para parsear CSV corretamente respeitando aspas e quebras de linha
+      function parseCSVLine(line: string): string[] {
+        const result: string[] = [];
+        let current = "";
+        let inQuotes = false;
+        
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          
+          if (char === '"') {
+            if (inQuotes && line[i + 1] === '"') {
+              // Aspas duplas escapadas
+              current += '"';
+              i++; // Pula o próximo caractere
+            } else {
+              // Toggle aspas
+              inQuotes = !inQuotes;
+            }
+          } else if (char === ',' && !inQuotes) {
+            // Vírgula fora de aspas = separador de campo
+            result.push(current);
+            current = "";
+          } else {
+            current += char;
+          }
+        }
+        
+        // Adiciona o último campo
+        result.push(current);
+        return result;
+      }
+
       for (const row of rows) {
-        const parts = row.split(",").map((c) => c.trim());
-        const rawUsername = parts[idxUsername];
-        if (!rawUsername) {
+        // Parseia a linha respeitando aspas
+        const parts = parseCSVLine(row);
+        
+        // Garante que temos pelo menos o número mínimo de colunas esperadas
+        const maxIdx = Math.max(
+          idxUsername, 
+          idxName >= 0 ? idxName : -1, 
+          idxBloco >= 0 ? idxBloco : -1,
+          idxCliente >= 0 ? idxCliente : -1
+        );
+        if (parts.length <= maxIdx) {
           skipped++;
           continue;
         }
-        const username = rawUsername.toLowerCase().replace(/^@/, "");
-        if (!username || existing.has(username)) {
+        
+        const rawUsername = parts[idxUsername] || "";
+        if (!rawUsername || rawUsername.trim() === "") {
+          skipped++;
+          continue;
+        }
+        
+        // Remove aspas, quebras de linha, @, parênteses, /, www.instagram.com/, faz split por espaços e pega apenas o primeiro índice
+        let username = rawUsername.trim()
+          .replace(/^["']+|["']+$/g, "") // Remove aspas no início e fim
+          .replace(/\r?\n/g, "") // Remove quebras de linha
+          .replace(/^www\.instagram\.com\//i, "") // Remove www.instagram.com/
+          .replace(/^instagram\.com\//i, "") // Remove instagram.com/
+          .replace(/^@/, "") // Remove @
+          .replace(/[()]/g, "") // Remove parênteses
+          .replace(/\/+$/, "") // Remove / no final
+          .split(" ")[0] // Split por espaços e pega primeiro termo
+          .trim();
+        
+        if (!username) {
+          skipped++;
+          continue;
+        }
+        
+        username = username.toLowerCase();
+        
+        // Só ignora se já existir exatamente esse username
+        if (existing.has(username)) {
           skipped++;
           continue;
         }
 
-        const name = idxName >= 0 ? parts[idxName] : "";
-        const blocoRaw = idxBloco >= 0 ? parts[idxBloco] : "";
-        const bloco = blocoRaw ? parseInt(blocoRaw, 10) : undefined;
+        const name = idxName >= 0 ? (parts[idxName] || "").trim().replace(/^["']+|["']+$/g, "").replace(/\r?\n/g, "") : "";
+        
+        // Bloco é opcional - se não existir no CSV, o backend atribuirá automaticamente
+        const blocoRaw = idxBloco >= 0 ? (parts[idxBloco] || "").trim() : "";
+        const bloco = blocoRaw && !isNaN(parseInt(blocoRaw, 10)) ? parseInt(blocoRaw, 10) : undefined;
+        
+        // Lê campo cliente do CSV (se existir), caso contrário usa false como padrão
+        let cliente = false;
+        if (idxCliente >= 0 && parts[idxCliente]) {
+          const clienteRaw = parts[idxCliente].trim().replace(/^["']+|["']+$/g, "").toLowerCase();
+          cliente = clienteRaw === "sim" || clienteRaw === "yes" || clienteRaw === "true" || clienteRaw === "1" || clienteRaw === "s";
+        }
 
-        toCreate.push({
+        // Se bloco não foi fornecido, não inclui no payload - o backend atribuirá automaticamente
+        const restaurantData: {
+          instagram_username: string;
+          name: string;
+          bloco?: number;
+          cliente: boolean;
+        } = {
           instagram_username: username,
           name,
-          ...(typeof bloco === "number" ? { bloco } : {}),
-          cliente: false,
-        });
+          cliente,
+        };
+        
+        // Só inclui bloco se foi fornecido no CSV
+        if (typeof bloco === "number" && !isNaN(bloco)) {
+          restaurantData.bloco = bloco;
+        }
+        
+        toCreate.push(restaurantData);
         existing.add(username);
         totalToCreate++;
+      }
+
+      // TODO: REMOVER - Filtro temporário para teste: limita a 400 restaurantes
+      const TEST_LIMIT = 50;
+      if (toCreate.length > TEST_LIMIT) {
+        const originalCount = toCreate.length;
+        toCreate = toCreate.slice(0, TEST_LIMIT);
+        console.log(`[TESTE] Limitando importação: ${originalCount} → ${TEST_LIMIT} restaurantes`);
       }
 
       if (toCreate.length === 0) {
@@ -310,6 +433,14 @@ export function RestaurantsTab() {
             className="px-3 py-1 text-xs rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-600"
           >
             Recarregar
+          </button>
+          <button
+            onClick={handleDeleteAllRestaurants}
+            className="px-3 py-1 text-xs rounded-md bg-red-950 hover:bg-red-900 border border-red-800 text-red-200"
+            disabled={loading || creating || updating}
+            title="Deleta todos os restaurantes"
+          >
+            Deletar tudo
           </button>
           <label className="text-xs px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 border border-slate-600 cursor-pointer">
             Importar CSV
