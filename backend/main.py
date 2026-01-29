@@ -1,6 +1,6 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, FileResponse
 
 import requests
 import time
@@ -15,6 +15,7 @@ from typing import Tuple, Union, Dict, Any
 from automator.carousel import CarouselAutomator
 from config import settings
 from automator.logging_to_dbapi import DatabaseApiLogHandler
+from restaurant_processor import process_restaurants_excel, process_restaurants_csv, assign_blocks_to_restaurants
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -327,10 +328,74 @@ def _post_to_database(path: str, json_body: Dict[str, Any], timeout: float = 15.
         return resp.status_code, resp.text
 
 
+@app.post("/restaurants/process-excel")
+async def process_restaurants_excel_endpoint(file: UploadFile = File(...)):
+    """
+    Processa arquivo Excel de restaurantes com deduplicação conservadora e agrupamento inteligente.
+    
+    Recebe um arquivo Excel com a aba "Restaurantes" e retorna um arquivo processado com:
+    - Deduplicação por Instagram idêntico ou Endereço Estrito
+    - Agrupamento em clusters (mesmo grupo/rede/dono)
+    - Distribuição em blocos de 5 a 10 registros
+    - Auditorias completas de deduplicação e clusters
+    """
+    import tempfile
+    import os
+    from pathlib import Path
+    
+    if not file.filename.lower().endswith((".xlsx", ".xls", ".csv")):
+        return JSONResponse(
+            {"error": "Arquivo deve ser Excel (.xlsx/.xls) ou CSV (.csv)"}, 
+            status_code=400
+        )
+    
+    # Salva arquivo temporário
+    suffix = ".csv" if file.filename.lower().endswith(".csv") else ".xlsx"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_input:
+        content = await file.read()
+        tmp_input.write(content)
+        tmp_input_path = tmp_input.name
+    
+    try:
+        # Processa o arquivo
+        if file.filename.lower().endswith(".csv"):
+            result = process_restaurants_csv(tmp_input_path)
+        else:
+            result = process_restaurants_excel(tmp_input_path)
+        output_path = result['output_file']
+        
+        # Retorna o arquivo processado
+        return FileResponse(
+            output_path,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            filename=Path(output_path).name,
+            headers={
+                "Content-Disposition": f"attachment; filename={Path(output_path).name}"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Erro ao processar Excel: {e}", exc_info=True)
+        return JSONResponse(
+            {"error": "Erro ao processar arquivo", "detail": str(e)}, 
+            status_code=500
+        )
+    finally:
+        # Remove arquivo temporário de entrada
+        try:
+            os.unlink(tmp_input_path)
+        except:
+            pass
+
+
 @app.post("/restaurants/bulk")
 async def bulk_create_restaurants(request: Request):
     """Recebe uma lista de restaurantes e cria em batches usando o endpoint bulk da database-api.
 
+    ATRIBUIÇÃO AUTOMÁTICA DE BLOCOS:
+    - Se os restaurantes não tiverem blocos, atribui automaticamente usando a lógica de agrupamento
+    - Se alguns tiverem blocos e outros não, atribui apenas aos que não têm
+    - Sempre usa a lógica de agrupamento para garantir que clusters sejam separados em blocos distintos
+    
     Processa em lotes de 100 restaurantes por vez para evitar sobrecarga do banco de dados.
     """
     try:
@@ -343,6 +408,44 @@ async def bulk_create_restaurants(request: Request):
 
     if not payload:
         return {"created": 0, "skipped": 0, "created_items": [], "errors": []}
+
+    # Verifica se os restaurantes têm blocos atribuídos
+    has_blocks = any(
+        r.get("bloco") is not None and r.get("bloco") != "" 
+        for r in payload 
+        if isinstance(r, dict)
+    )
+    
+    # Se não tiverem blocos ou se alguns não tiverem, atribui automaticamente
+    if not has_blocks or any(
+        r.get("bloco") is None or r.get("bloco") == "" 
+        for r in payload 
+        if isinstance(r, dict)
+    ):
+        try:
+            logger.info(f"Atribuindo blocos automaticamente a {len(payload)} restaurantes...")
+            # Busca o maior bloco existente no banco para continuar a numeração
+            try:
+                resp_existing = requests.get(f"{settings.DATABASE_API_URL}/restaurants/", timeout=10)
+                if resp_existing.status_code == 200:
+                    existing_restaurants = resp_existing.json()
+                    max_existing_bloco = max(
+                        (r.get("bloco", 0) or 0 for r in existing_restaurants if r.get("bloco")),
+                        default=0
+                    )
+                    start_block_num = max_existing_bloco + 1
+                else:
+                    start_block_num = 1
+            except Exception as e:
+                logger.warning(f"Erro ao buscar restaurantes existentes para determinar bloco inicial: {e}")
+                start_block_num = 1
+            
+            # Atribui blocos usando a lógica de agrupamento
+            payload = assign_blocks_to_restaurants(payload, start_block_num=start_block_num)
+            logger.info(f"Blocos atribuídos automaticamente. Maior bloco: {max((r.get('bloco', 0) or 0) for r in payload) if payload else 0}")
+        except Exception as e:
+            logger.error(f"Erro ao atribuir blocos automaticamente: {e}", exc_info=True)
+            # Continua mesmo se falhar a atribuição de blocos (não bloqueia o processo)
 
     BATCH_SIZE = 100  # Processa 100 restaurantes por vez
     all_created = []
